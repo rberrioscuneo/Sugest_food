@@ -10,6 +10,7 @@ const i18n = {
         guide_desc: 'Referencia visual para 1 porción equivalente:',
         portions_tab: 'Porciones', add_tab: 'Añadir', 
         sug_tab: 'Sugerencias', prog_tab: 'Progreso', prof_tab: 'Perfil',
+        prod_tab: 'Productos', // V13 Search Tab
         // Home
         hello: 'Hola', daily_goal: 'Objetivo Diario', progress: 'Progreso',
         tip_title: 'Tip Saludable', tip_next: 'Siguiente >>',
@@ -85,6 +86,7 @@ const i18n = {
         guide_desc: 'Visual reference for 1 equivalent portion:',
         portions_tab: 'Portions', add_tab: 'Add', 
         sug_tab: 'Suggestions', prog_tab: 'Progress', prof_tab: 'Profile',
+        prod_tab: 'Products', // V13 Search Tab
         // Home
         hello: 'Hello', daily_goal: 'Daily Goal', progress: 'Progress',
         tip_title: 'Health Tip', tip_next: 'Next >>',
@@ -106,6 +108,18 @@ const i18n = {
         ai_cooking: 'The AI Chef is cooking ideas...',
         ai_generating: 'Generating recipes for groups:',
         ai_thinking_tip: 'The AI Chef is preparing a tip for you... 🤖',
+        // Settings
+        settings: 'Settings', set_api:'Add your Gemini API Key here:', save_key:'Save Key', clear_history:'Clear History', 
+        lang_toggle: 'Cambiar a Español',
+        // Products (OFF API)
+        prod_title: 'Product Search',
+        prod_desc: 'Search for a product by name to see its macros and log its consumption.',
+        prod_search_ph: 'E.g. Whole milk, Oats...',
+        prod_btn: 'Search',
+        prod_logging: 'Log',
+        prod_timeline: 'Consumption Log',
+        prod_empty: 'You haven\'t logged any products yet today.',
+        prod_cal: 'kcal / 100g',
         // Log
         save_record: 'Save Record', recent_history: 'Recent History',
         no_history: 'You haven\'t logged anything yet today.',
@@ -777,6 +791,7 @@ function renderView(viewName) {
     const lnSug = document.getElementById('nav-sugerencias'); if(lnSug) lnSug.innerText = t('sug_tab');
     const lnPor = document.getElementById('nav-porciones'); if(lnPor) lnPor.innerText = t('portions_tab');
     const lnProf = document.getElementById('nav-perfil'); if(lnProf) lnProf.innerText = t('prof_tab');
+    const lnProd = document.getElementById('nav-productos'); if(lnProd) lnProd.innerText = t('prod_tab');
 
     // Force user to profile if first time
     if (!userProfile && viewName !== 'profile') {
@@ -798,6 +813,9 @@ function renderView(viewName) {
         case 'portions':
             renderPortions();
             break;
+        case 'products':
+            renderProducts();
+            break;
     }
 }
 
@@ -809,6 +827,131 @@ function updateNavButtons(activeView) {
             btn.classList.remove('active');
         }
     });
+}
+
+// --- View: Products (OFF Search & Timeline) ---
+let lastOFFResult = null;
+
+function renderProducts() {
+    let timelineHtml = '';
+    const now = new Date();
+    
+    // Filter history for products logged today
+    const todaysProducts = userHistory.filter(entry => {
+        if (!entry.product) return false;
+        const entryDate = new Date(entry.timestamp);
+        return entryDate.toDateString() === now.toDateString();
+    });
+
+    if (todaysProducts.length === 0) {
+        timelineHtml = \`<div style="color: var(--text-muted); font-size: 14px; padding: 20px; text-align: center; border: 1px dashed rgba(0,0,0,0.1); border-radius: 12px; margin-top: 10px;">\${t('prod_empty')}</div>\`;
+    } else {
+        timelineHtml = \`<div style="display: flex; overflow-x: auto; scroll-snap-type: x mandatory; padding: 10px 0; gap: 12px; -webkit-overflow-scrolling: touch;">\`;
+        todaysProducts.forEach(entry => {
+            const timeStr = new Date(entry.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            timelineHtml += \`
+                <div style="min-width: 140px; scroll-snap-align: center; background: rgba(255,255,255,0.8); border: 1px solid rgba(0,0,0,0.05); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; align-items: center; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); flex-shrink: 0;">
+                    <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; background: rgba(0,0,0,0.04); padding: 2px 8px; border-radius: 10px;">\${timeStr}</div>
+                    \${entry.product.image ? \`<img src="\${entry.product.image}" style="width: 48px; height: 48px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; border: 1px solid rgba(0,0,0,0.1);">\` : \`<div style="font-size: 24px; margin-bottom: 8px;">📦</div>\`}
+                    <div style="font-size: 13px; font-weight: bold; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 4px;">\${entry.product.name}</div>
+                    <div style="font-size: 12px; color: var(--primary-color); font-weight: 600;">\${Math.round(entry.product.calories)} kcal</div>
+                </div>\`;
+        });
+        timelineHtml += \`</div>\`;
+    }
+
+    let searchResultHtml = '';
+    if (lastOFFResult) {
+        searchResultHtml = \`
+            <div style="background: white; border-radius: 12px; padding: 16px; margin-top: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid var(--primary-light);">
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+                    \${lastOFFResult.image ? \`<img src="\${lastOFFResult.image}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px;">\` : \`<div style="font-size: 32px;">📦</div>\`}
+                    <div>
+                        <h4 style="margin: 0 0 4px 0; font-size: 16px;">\${lastOFFResult.name}</h4>
+                        <div style="font-size: 12px; color: var(--text-muted);">\${Math.round(lastOFFResult.calories)} \${t('prod_cal')}</div>
+                    </div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,0,0,0.05);">
+                    <div style="text-align: center;"><strong>PRO</strong><br>\${Math.round(lastOFFResult.macros.pro)}g</div>
+                    <div style="text-align: center;"><strong>CHO</strong><br>\${Math.round(lastOFFResult.macros.cho)}g</div>
+                    <div style="text-align: center;"><strong>AAGG</strong><br>\${Math.round(lastOFFResult.macros.fat)}g</div>
+                </div>
+                <button onclick="logOFFProduct()" class="btn btn-primary" style="width: 100%; border-radius: 8px; padding: 12px; font-weight: bold;">+ \${t('prod_logging')}</button>
+            </div>
+        \`;
+    }
+
+    let html = \`
+        <h2>\${t('prod_title')} 🔍</h2>
+        <p style="margin-bottom: 20px; color: var(--text-muted); font-size: 14px; line-height: 1.5;">\${t('prod_desc')}</p>
+        
+        <div class="glass-card" style="padding: 16px; margin-bottom: 24px;">
+            <div style="display: flex; gap: 8px;">
+                <input type="text" id="off-search-input" placeholder="\${t('prod_search_ph')}" style="flex: 1; padding: 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); font-size: 15px; font-family: inherit;">
+                <button onclick="handleOFFSearch()" class="btn btn-primary" style="padding: 12px 16px; border-radius: 8px; border: none; background: var(--primary-color); color: white; display:flex; align-items:center; justify-content:center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </button>
+            </div>
+            
+            <div id="off-loading-state" style="display: none; text-align: center; padding: 20px; color: var(--primary-light);">
+                <span class="spinner" style="display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(0,0,0,0.1); border-radius: 50%; border-top-color: var(--primary-color); animation: spin 1s ease-in-out infinite;"></span>
+                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+                <div style="margin-top: 8px; font-size: 13px; font-weight: 500;">Buscando...</div>
+            </div>
+
+            <div id="off-search-result-container">
+                \${searchResultHtml}
+            </div>
+        </div>
+
+        <h3 style="margin-bottom: 12px;">\${t('prod_timeline')} ⏱️</h3>
+        \${timelineHtml}
+    \`;
+
+    mainContent.innerHTML = html;
+}
+
+// Handlers for Products View
+async function handleOFFSearch() {
+    const input = document.getElementById('off-search-input');
+    const query = input.value.trim();
+    if (!query) return;
+
+    // Show loading
+    document.getElementById('off-search-result-container').innerHTML = '';
+    document.getElementById('off-loading-state').style.display = 'block';
+
+    const result = await fetchOFFProduct(query);
+    
+    document.getElementById('off-loading-state').style.display = 'none';
+
+    if (result) {
+        lastOFFResult = result;
+    } else {
+        lastOFFResult = null;
+        document.getElementById('off-search-result-container').innerHTML = \`<div style="color: var(--accent-color); font-size: 14px; padding: 16px; text-align: center; background: rgba(255,0,0,0.05); border-radius: 12px; margin-top: 16px;">No se encontró ningún producto exacto. Intenta ser más específico.</div>\`;
+        return;
+    }
+    
+    // Re-render to show result
+    renderProducts();
+}
+
+function logOFFProduct() {
+    if (!lastOFFResult) return;
+
+    const record = {
+        timestamp: new Date().toISOString(),
+        product: lastOFFResult // Format V13
+    };
+    
+    userHistory.unshift(record);
+    localStorage.setItem('aesan_history', JSON.stringify(userHistory));
+    
+    // Clear search and show success
+    lastOFFResult = null;
+    window.showCustomModal('Exito ✅', 'Producto registrado en tu diario de consumo.');
+    renderProducts();
 }
 
 function renderHome() {
