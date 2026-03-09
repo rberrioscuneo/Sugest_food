@@ -1069,7 +1069,7 @@ function renderProducts() {
             
             // Render the Parent Row
             listItems += `
-                <div id="sr-group-${groupIndex}" onclick="window.expandGroup(${groupIndex})" class="search-parent-row" style="display: flex; align-items: center; gap: 12px; padding: 12px 10px; border-bottom: 1px solid rgba(0,0,0,0.04); cursor: pointer; transition: background 0.15s; border-radius: 8px;">
+                <div id="sr-group-${groupIndex}" onclick="window.expandGroup(${groupIndex})" class="search-parent-row" style="display: flex; align-items: center; gap: 12px; padding: 12px 10px; border-bottom: 1px solid rgba(0,0,0,0.04); cursor: pointer; transition: background 0.15s; border-radius: 8px; flex-wrap: wrap;">
                     <div style="font-size: 22px; width: 36px; text-align: center; flex-shrink: 0;">
                         ${group.baseImg !== '📦' ? `<img src="${group.baseImg}" style="width: 36px; height: 36px; object-fit: cover; border-radius: 6px;">` : '📦'}
                     </div>
@@ -1391,22 +1391,22 @@ function renderHome() {
         
         <div class="glass-card" style="margin-bottom: 24px; position: relative;">
             <button onclick="window.showMacroInfo()" style="position: absolute; top: 12px; right: 12px; background:var(--primary-color); color:white; border:none; border-radius:50%; width:20px; height:20px; font-size:12px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-weight:bold; z-index: 10;">?</button>
-            <div style="display: flex; justify-content: space-between; align-items: flex-end;">
-                <div>
-                    <span style="font-size: 12px; color: var(--text-muted); text-transform: uppercase;">${t('daily_goal')}</span>
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px;">
+                <div style="min-width: 120px;">
+                    <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;">${t('daily_goal')}</span>
                     <div style="font-size: 28px; font-weight: 700; color: var(--primary-color)">${energy.tdee} <span style="font-size: 16px;">kcal</span></div>
                 </div>
-                <div style="text-align: right; margin-right: 16px;">
-                    <div style="font-size: 14px;"><strong>PRO:</strong> ${energy.proteinGrams}g</div>
-                    <div style="font-size: 14px;"><strong>CHO:</strong> ${energy.carbsGrams}g</div>
-                    <div style="font-size: 14px;"><strong>AAGG:</strong> ${energy.fatsGrams}g</div>
+                <div style="text-align: right; margin-right: 16px; min-width: 100px;">
+                    <div style="font-size: 13px;"><strong>PRO:</strong> ${energy.proteinGrams}g</div>
+                    <div style="font-size: 13px;"><strong>CHO:</strong> ${energy.carbsGrams}g</div>
+                    <div style="font-size: 13px;"><strong>AAGG:</strong> ${energy.fatsGrams}g</div>
                 </div>
             </div>
         </div>
         
         <h3 style="margin-bottom: 12px;">${t('progress')}</h3>
         <div class="glass-card" style="padding: 16px 12px; margin-bottom: 24px;">
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px;">
                 ${progressHtml}
             </div>
         </div>
@@ -1414,7 +1414,7 @@ function renderHome() {
         <!-- 1. Energía y Macronutrientes Básicos -->
         <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
             <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                EFSA: Energía y Macronutrientes Básicos 🔬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+                Energía y Macronutrientes Básicos 🔬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
             </summary>
             <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
                 ${(() => {
@@ -1453,7 +1453,7 @@ function renderHome() {
         <!-- 2. Carbohidratos y Fibra Dietética -->
         <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
             <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                EFSA: Carbohidratos y Fibra Dietética 🌾 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+                Carbohidratos y Fibra Dietética 🌾 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
             </summary>
             <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
                 ${(() => {
@@ -1480,7 +1480,7 @@ function renderHome() {
         <!-- 3. Grasas y Perfil Lipídico -->
         <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
             <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                EFSA: Grasas y Perfil Lipídico 🥑 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+                Grasas y Perfil Lipídico 🥑 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
             </summary>
             <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
                 ${(() => {
@@ -1519,7 +1519,7 @@ function renderHome() {
         <!-- 4. Vitaminas -->
         <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
             <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                EFSA: Requerimientos de Vitaminas ☀️ <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+                Requerimientos de Vitaminas ☀️ <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
             </summary>
             <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
                 ${(() => {
@@ -1557,7 +1557,7 @@ function renderHome() {
         <!-- 5. Minerales -->
         <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
             <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                EFSA: Elementos y Minerales Traza 🪨 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+                Elementos y Minerales Traza 🪨 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
             </summary>
             <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
                 ${(() => {
@@ -1588,7 +1588,7 @@ function renderHome() {
         <!-- 6. Aminoácidos Esenciales -->
         <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
             <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                EFSA: Aminoácidos Esenciales 🧬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+                Aminoácidos Esenciales 🧬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
             </summary>
             <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
                 ${(() => {
@@ -1772,7 +1772,7 @@ function renderSuggestions() {
             
             recHtml += `
                 <div class="glass-card" style="margin-bottom: 16px; padding: 16px;">
-                    <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 12px; flex-wrap: wrap;">
                         <div style="font-size: 40px; background: rgba(255,255,255,0.5); border-radius: 12px; padding: 10px;">
                             ${meal.image}
                         </div>
@@ -1963,7 +1963,7 @@ function renderPortions() {
     Object.entries(PORTIONS_GUIDE).forEach(([key, info]) => {
         const currentVal = todayPortions[key] || 0;
         cardsHtml += `
-            <div class="glass-card" style="margin-bottom: 12px; display: flex; align-items: center; gap: 14px; padding: 14px; position: relative;">
+            <div class="glass-card" style="margin-bottom: 12px; display: flex; align-items: center; gap: 14px; padding: 14px; position: relative; flex-wrap: wrap;">
                 <div style="font-size: 36px; min-width: 50px; text-align: center;">
                     ${info.icon}
                 </div>
@@ -2195,7 +2195,7 @@ function renderProfileContent(container) {
             </div>
             
             <h4 style="margin-top: 20px; margin-bottom: 10px;">${t('sports_title')}</h4>
-            <div style="display: flex; gap: 10px;">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <div style="flex: 1">
                     <label style="font-size: 12px;">${t('strength')}</label>
                     <input type="number" id="p-strength" value="${p.sports?.strength || 0}" min="0">

@@ -39,11 +39,12 @@ body {
 
 #app-container {
     width: 100%;
-    max-width: 480px; /* Mobile app constraint on desktop */
+    max-width: 480px;
     min-height: 100vh;
     position: relative;
     background: transparent;
     box-shadow: 0 0 20px rgba(0,0,0,0.05);
+    overflow-x: hidden; /* Prevent horizontal scroll on container level */
 }
 
 #main-content {
@@ -89,6 +90,7 @@ body {
     border-top-left-radius: 24px;
     border-top-right-radius: 24px;
     padding-bottom: env(safe-area-inset-bottom);
+    box-sizing: border-box;
 }
 
 .nav-btn {
@@ -315,3 +317,34 @@ input, select {
     }
 }
 
+@media (max-width: 400px) {
+    #main-content {
+        padding: 16px 10px;
+    }
+    .nav-btn {
+        padding: 8px 2px;
+        font-size: 10px;
+    }
+    .nav-btn span {
+        display: block;
+        max-width: 55px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .nav-btn svg {
+        width: 20px;
+        height: 20px;
+    }
+    .glass-card {
+        padding: 16px 12px;
+        border-radius: 16px;
+    }
+}
+
+@media (max-width: 340px) {
+    .nav-btn span {
+        font-size: 9px;
+        max-width: 50px;
+    }
+}

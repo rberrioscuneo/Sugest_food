@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aesan-cache-v4';
+const CACHE_NAME = 'aesan-cache-v6';
 const urlsToCache = [
   './',
   './index.html',

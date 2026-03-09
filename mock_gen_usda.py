@@ -375,38 +375,8 @@ for f in fishes_ext:
         }
         expanded_db.append(new_item)
 
-# Add 600 combinations of cuts + prep
-adjectives = ["Calidad Extra", "Orgánico", "ECO", "Supermercado", "Mercado", "De Granja"]
-for adj in adjectives:
-    for base_name in list(usda_base_meats.keys()):
-        lower_name = base_name.lower()
-        # Skip combinations for fruits and vegetables
-        if any(v in lower_name for v in ["cebolla", "zanahoria", "pimiento", "calabacín", "berenjena", "pepino", "puerro", "patata", "boniato", "ajo", "lechuga", "espinaca", "coliflor", "brócoli", "plátano", "manzana", "naranja", "pera", "melocotón", "kiwi", "limón", "tomate", "aguacate", "mandarina", "ciruela", "fresa", "frambuesa", "arándano", "uva", "sandía", "melón", "piña"]):
-            continue
-            
-        m = usda_base_meats[base_name]
-        variations = map_variations(base_name)
-        for var_name, pro_mult, fat_mult, add_cho in variations:
-            if len(expanded_db) >= 1000: break
-            # Tweak macros by +- 5% randomly using hash
-            h = (hash(adj) + hash(base_name)) % 10
-            tweak = 1.0 + (h - 5) / 100.0 # 0.95 to 1.05
-            
-            pro = m["pro"] * pro_mult * tweak
-            fat = m["fat"] * fat_mult * tweak
-            cho = (m["cho"] * pro_mult) + add_cho
-            cals = (pro * 4) + (cho * 4) + (fat * 9)
-            
-            new_item = {
-                "name": f"{base_name} {adj} ({var_name})",
-                "macros": {
-                    "pro": round(pro, 1), "cho": round(cho, 1), "fat": round(fat, 1),
-                    "fiber": 0, "sugars": 0, "sat": round(fat*0.3, 1), "mono": round(fat*0.4, 1), "poly": round(fat*0.2, 1),
-                    "omega3": 0, "omega6": 0, "epa": 0, "dha": 0
-                },
-                "micros": {}, "aminos": {}, "calories": round(cals)
-            }
-            expanded_db.append(new_item)
+# Resulting items count
+print(f"Total items generated: {len(expanded_db)}")
 
 # Output valid JS file
 js_content = f"const localProductsDB = {json.dumps(expanded_db[:1000], indent=2)};"
