@@ -962,10 +962,13 @@ function renderView(viewName) {
     const lnProd = document.getElementById('nav-productos'); if(lnProd) lnProd.innerText = t('prod_tab');
 
     // Force user to profile if first time
-    if (!userProfile && viewName !== 'profile') {
-        alert(t('first_time'));
-        renderView('options');
-        return;
+    const isProfileView = viewName === 'profile' || viewName === 'options';
+    if (!userProfile && !isProfileView) {
+        if (window.showToast) {
+            window.showToast(t('first_time'), 5000);
+        }
+        updateNavButtons('options'); // Keep nav highlighted on options
+        return; // Don't proceed to update currentView or render anything else
     }
     
     switch(viewName) {
@@ -2176,13 +2179,16 @@ function renderProfileContent(container) {
 
             <div style="display: flex; gap: 10px;">
                 <div style="flex: 1">
-                    <label>${t('activity_label')}</label>
+                    <label style="display: flex; align-items: center; gap: 4px;">
+                        ${t('activity_label')}
+                        <span onclick="window.showCustomModal('${t('activity_label')} 💡', '<b>Sedentario:</b> Poco/ningún ejercicio (oficina).<br><b>Ligero:</b> 1-3 días (caminar, yoga).<br><b>Moderado:</b> 3-5 días (gimnasio, trote).<br><b>Muy Activo:</b> 6-7 días (entrenamiento diario).<br><b>Extra Activo:</b> 2v/día o trabajo físico pesado.')" style="cursor:pointer; background:var(--primary-color); color:white; border-radius:50%; width:14px; height:14px; font-size:10px; display:flex; align-items:center; justify-content:center; font-weight:bold;">?</span>
+                    </label>
                     <select id="p-activity">
-                        <option value="A" ${isSelected(p.activityLevel, 'A')}>${t('sedentary')}</option>
-                        <option value="B" ${isSelected(p.activityLevel, 'B')}>${t('light_active')}</option>
-                        <option value="C" ${isSelected(p.activityLevel, 'C')}>${t('mod_active')}</option>
-                        <option value="D" ${isSelected(p.activityLevel, 'D')}>${t('very_active')}</option>
-                        <option value="E" ${isSelected(p.activityLevel, 'E')}>${t('ext_active')}</option>
+                        <option value="A" ${isSelected(p.activityLevel, 'A')}>Sedentario (Bajo)</option>
+                        <option value="B" ${isSelected(p.activityLevel, 'B')}>Actividad Ligera</option>
+                        <option value="C" ${isSelected(p.activityLevel, 'C')}>Actividad Moderada</option>
+                        <option value="D" ${isSelected(p.activityLevel, 'D')}>Muy Activo</option>
+                        <option value="E" ${isSelected(p.activityLevel, 'E')}>Extra Activo (+15h/sem)</option>
                     </select>
                 </div>
                 <div style="flex: 1">
@@ -2196,16 +2202,25 @@ function renderProfileContent(container) {
             
             <h4 style="margin-top: 20px; margin-bottom: 10px;">${t('sports_title')}</h4>
             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <div style="flex: 1">
-                    <label style="font-size: 12px;">${t('strength')}</label>
+                <div style="flex: 1; min-width: 80px;">
+                    <label style="font-size: 11px; display: flex; align-items: center; gap: 4px;">
+                        ${t('strength')}
+                        <span onclick="window.showCustomModal('${t('strength')} 💪', 'Gimnasio, calistenia, crossfit. Aumenta la demanda diaria de aminoácidos para reparación muscular.')" style="cursor:pointer; background:var(--primary-color); color:white; border-radius:50%; width:12px; height:12px; font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:bold;">?</span>
+                    </label>
                     <input type="number" id="p-strength" value="${p.sports?.strength || 0}" min="0">
                 </div>
-                <div style="flex: 1">
-                    <label style="font-size: 12px;">${t('endurance')}</label>
+                <div style="flex: 1; min-width: 80px;">
+                    <label style="font-size: 11px; display: flex; align-items: center; gap: 4px;">
+                        ${t('endurance')}
+                        <span onclick="window.showCustomModal('${t('endurance')} 🏃', 'Running, ciclismo, natación. Aumenta la demanda de hidratos de carbono, magnesio y hierro.')" style="cursor:pointer; background:var(--primary-color); color:white; border-radius:50%; width:12px; height:12px; font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:bold;">?</span>
+                    </label>
                     <input type="number" id="p-endurance" value="${p.sports?.endurance || 0}" min="0">
                 </div>
-                <div style="flex: 1">
-                    <label style="font-size: 12px;">${t('team')}</label>
+                <div style="flex: 1; min-width: 80px;">
+                    <label style="font-size: 11px; display: flex; align-items: center; gap: 4px;">
+                        ${t('team')}
+                        <span onclick="window.showCustomModal('${t('team')} ⚽', 'Fútbol, tenis, baloncesto. Mezcla ráfagas de alta intensidad con recuperación. Demanda mixta.')" style="cursor:pointer; background:var(--primary-color); color:white; border-radius:50%; width:12px; height:12px; font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:bold;">?</span>
+                    </label>
                     <input type="number" id="p-intermittent" value="${p.sports?.intermittent || 0}" min="0">
                 </div>
             </div>
