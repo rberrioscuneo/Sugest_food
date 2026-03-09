@@ -9,7 +9,7 @@ const i18n = {
         guide_title: 'Guía de Porciones',
         guide_desc: 'Referencia visual para 1 porción equivalente:',
         portions_tab: 'Porciones', add_tab: 'Añadir', 
-        sug_tab: 'Sugerencias', prog_tab: 'Progreso', prof_tab: 'Perfil',
+        sug_tab: 'Sugerencias', prog_tab: 'Progreso', prof_tab: 'Opciones',
         prod_tab: 'Productos', // V13 Search Tab
         // Home
         hello: 'Hola', daily_goal: 'Objetivo Diario', progress: 'Progreso',
@@ -32,6 +32,15 @@ const i18n = {
         ai_cooking: 'El Chef IA está cocinando ideas...',
         ai_generating: 'Generando recetas para los grupos:',
         ai_thinking_tip: 'El Chef IA está elaborando un consejo para ti... 🤖',
+        // Products (OFF API)
+        prod_title: 'Buscador de Productos',
+        prod_desc: 'Busca un producto por su nombre para ver su tabla de macros y registrar su consumo.',
+        prod_search_ph: 'Ej. Leche entera, Avena...',
+        prod_btn: 'Buscar',
+        prod_logging: 'Registrar',
+        prod_timeline: 'Diario de Consumo',
+        prod_empty: 'Aún no has registrado productos directos hoy.',
+        prod_cal: 'kcal / 100g',
         // Log
         save_record: 'Guardar Registro', recent_history: 'Historial Reciente',
         no_history: 'No has registrado nada aún hoy.',
@@ -85,7 +94,7 @@ const i18n = {
         guide_title: 'Portions Guide',
         guide_desc: 'Visual reference for 1 equivalent portion:',
         portions_tab: 'Portions', add_tab: 'Add', 
-        sug_tab: 'Suggestions', prog_tab: 'Progress', prof_tab: 'Profile',
+        sug_tab: 'Suggestions', prog_tab: 'Progress', prof_tab: 'Options',
         prod_tab: 'Products', // V13 Search Tab
         // Home
         hello: 'Hello', daily_goal: 'Daily Goal', progress: 'Progress',
@@ -110,7 +119,7 @@ const i18n = {
         ai_thinking_tip: 'The AI Chef is preparing a tip for you... 🤖',
         // Settings
         settings: 'Settings', set_api:'Add your Gemini API Key here:', save_key:'Save Key', clear_history:'Clear History', 
-        lang_toggle: 'Cambiar a Español',
+        lang_toggle: 'Change to Spanish',
         // Products (OFF API)
         prod_title: 'Product Search',
         prod_desc: 'Search for a product by name to see its macros and log its consumption.',
@@ -449,6 +458,28 @@ const HEALTH_TIPS = [
     { text: "Las legumbres son una excelente fuente de proteína vegetal. Consumirlas 3-4 veces por semana es ideal para el organismo y el planeta.", icon: "🍲" }
 ];
 
+// Toast notification (slides down from top, auto-dismiss)
+window.showToast = function(message, durationMs = 5000) {
+    const existing = document.getElementById('toast-notification');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'toast-notification';
+    toast.textContent = message;
+    Object.assign(toast.style, {
+        position: 'fixed', top: '-80px', left: '50%', transform: 'translateX(-50%)',
+        background: 'var(--secondary-color)', color: 'white', padding: '14px 28px',
+        borderRadius: '14px', fontSize: '14px', fontWeight: '600', zIndex: '99999',
+        boxShadow: '0 8px 24px rgba(16,185,129,0.35)', transition: 'top 0.4s cubic-bezier(0.34,1.56,0.64,1)',
+        maxWidth: '90vw', textAlign: 'center', fontFamily: 'inherit'
+    });
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => { toast.style.top = '24px'; });
+    setTimeout(() => {
+        toast.style.top = '-80px';
+        setTimeout(() => toast.remove(), 400);
+    }, durationMs);
+};
+
 // --- Energy & Macronutrient Logics (User_interview.py & macronutrients_athletes.py) ---
 const ACTIVITY_LEVELS = {
     'A': { label: 'Sedentary',     pal: 1.45 },
@@ -487,14 +518,26 @@ function calculateEnergyNeeds(profile) {
 
 // --- Open Food Facts API Integration ---
 /**
- * Realiza una consulta asíncrona a la API de Open Food Facts.
- * Arquitectura: Usa fetch con try...catch para asegurar tolerancia a fallos de red sin bloquear la previsualización ni el hilo principal.
- * Optimización: Parámetros search_simple=1 y json=1 optimizan la carga útil, delegando filtrado pesado al servidor.
+ * Realiza una búsqueda híbrida: primero en la base de datos local y, si no hay resultados, en Open Food Facts.
+ * Retorna un array de resultados.
  */
-async function fetchOFFProduct(searchQuery) {
-    if (!searchQuery) return null;
+async function searchProducts(searchQuery) {
+    if (!searchQuery) return [];
+    const queryLower = searchQuery.toLowerCase();
+    
+    // 1. Búsqueda Local (Instantánea, O(N))
+    let results = [];
+    if (typeof localProductsDB !== 'undefined') {
+        results = localProductsDB.filter(p => p.name.toLowerCase().includes(queryLower));
+    }
+    
+    if (results.length > 0) {
+        return results.slice(0, 50); // Limitar a los 50 mejores resultados locales para mostrar variaciones
+    }
+
+    // 2. Fallback a OFF API
     try {
-        const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(searchQuery)}&search_simple=1&action=process&json=1&page_size=1`;
+        const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(searchQuery)}&json=1&page_size=5`;
         const response = await fetch(url);
         
         if (!response.ok) {
@@ -503,32 +546,46 @@ async function fetchOFFProduct(searchQuery) {
         
         const data = await response.json();
         if (data.products && data.products.length > 0) {
-            const p = data.products[0];
-            const n = p.nutriments || {};
-            // Sanitización de datos: Extraer solo nutrientes críticos y asegurar un valor fallback (0) 
-            // Esto previene errores de 'NaN' o 'undefined' en cálculos posteriores de UI. 
-            // Las vitaminas/minerales en la API suelen expresarse en gramos bajo '_100g', por ello el factor x1000.
-            return {
-                name: p.product_name || searchQuery,
-                image: p.image_url || '',
-                macros: {
-                    pro: Number(n.proteins_100g) || 0,
-                    cho: Number(n.carbohydrates_100g) || 0,
-                    fat: Number(n.fat_100g) || 0
-                },
-                calories: Number(n['energy-kcal_100g']) || 0,
-                micros: {
-                    calcium_mg: (Number(n.calcium_100g) * 1000) || 0,
-                    iron_mg: (Number(n.iron_100g) * 1000) || 0,
-                    vitamin_c_mg: (Number(n['vitamin-c_100g']) * 1000) || 0
-                }
-            };
+            return data.products.map(p => {
+                const n = p.nutriments || {};
+                return {
+                    name: p.product_name || searchQuery,
+                    image: p.image_url || '',
+                    macros: {
+                        pro: Number(n.proteins_100g) || 0,
+                        cho: Number(n.carbohydrates_100g) || 0,
+                        fat: Number(n.fat_100g) || 0
+                    },
+                    calories: Number(n['energy-kcal_100g']) || 0,
+                    micros: {
+                        // Minerals
+                        calcium_mg: (Number(n.calcium_100g) * 1000) || 0,
+                        iron_mg: (Number(n.iron_100g) * 1000) || 0,
+                        magnesium_mg: (Number(n.magnesium_100g) * 1000) || 0,
+                        zinc_mg: (Number(n.zinc_100g) * 1000) || 0,
+                        potassium_mg: (Number(n.potassium_100g) * 1000) || 0,
+                        selenium_ug: (Number(n.selenium_100g) * 1000000) || 0,
+                        iodine_ug: (Number(n.iodine_100g) * 1000000) || 0,
+                        // Vitamins
+                        vit_a_ug: (Number(n['vitamin-a_100g']) * 1000000) || 0,
+                        vit_d_ug: (Number(n['vitamin-d_100g']) * 1000000) || 0,
+                        vit_e_mg: (Number(n['vitamin-e_100g']) * 1000) || 0,
+                        vit_k_ug: (Number(n['vitamin-k_100g']) * 1000000) || 0,
+                        vit_c_mg: (Number(n['vitamin-c_100g']) * 1000) || 0,
+                        vit_b1_mg: (Number(n['vitamin-b1_100g']) * 1000) || 0,
+                        vit_b2_mg: (Number(n['vitamin-b2_100g']) * 1000) || 0,
+                        vit_b3_mg: (Number(n['vitamin-pp_100g']) * 1000) || 0,
+                        vit_b6_mg: (Number(n['vitamin-b6_100g']) * 1000) || 0,
+                        vit_b9_ug: (Number(n['vitamin-b9_100g']) * 1000000) || 0,
+                        vit_b12_ug: (Number(n['vitamin-b12_100g']) * 1000000) || 0
+                    }
+                };
+            });
         }
-        return null;
+        return [];
     } catch (error) {
-        // Fallback silencioso en consola para mantener la UX ininterrumpida
-        console.error(`[OFF API] Fallo en la red o parseo al buscar '${searchQuery}':`, error);
-        return null;
+        console.error(`[OFF API] Error al buscar '${searchQuery}':`, error);
+        return [];
     }
 }
 
@@ -539,32 +596,53 @@ async function fetchOFFProduct(searchQuery) {
  * Arquitectura: Organizar en una estructura inmutable estática (const) permite consultas en O(1) y rápida escalabilidad a nuevos nutrientes.
  */
 const EFSA_DRV = {
-    calcium_mg: {
-        adult_18_24:   { pri: 1000, ul: 2500 },
-        adult_over_25: { pri: 950,  ul: 2500 }
-    },
-    iron_mg: {
-        men_over_18:   { pri: 11, ul: null },
-        women_18_49:   { pri: 16, ul: null }, // Requerimiento elevado premenopausia
-        women_over_50: { pri: 11, ul: null }  // Postmenopausia
-    },
-    vitamin_c_mg: {
-        men:   { pri: 110, ul: null },
-        women: { pri: 95,  ul: null }
-    }
+    // Minerals
+    calcium_mg: { adult_18_24: { pri: 1000 }, adult_over_25: { pri: 950 } },
+    iron_mg: { men_over_18: { pri: 11 }, women_18_49: { pri: 16 }, women_over_50: { pri: 11 } },
+    magnesium_mg: { men: { pri: 350 }, women: { pri: 300 } },
+    zinc_mg: { men: { pri: 16.3 }, women: { pri: 12.7 } },
+    potassium_mg: { all: { pri: 3500 } },
+    selenium_ug: { all: { pri: 70 } },
+    iodine_ug: { all: { pri: 150 } },
+    // Vitamins
+    vit_a_ug: { men: { pri: 750 }, women: { pri: 650 } },
+    vit_d_ug: { all: { pri: 15 } },
+    vit_e_mg: { men: { pri: 13 }, women: { pri: 11 } },
+    vit_k_ug: { all: { pri: 70 } },
+    vitamin_c_mg: { men: { pri: 110 }, women: { pri: 95 } },
+    vit_b1_mg: { men: { pri: 1.2 }, women: { pri: 1.1 } },
+    vit_b2_mg: { men: { pri: 1.6 }, women: { pri: 1.3 } },
+    vit_b3_mg: { men: { pri: 16 }, women: { pri: 14 } },
+    vit_b6_mg: { men: { pri: 1.5 }, women: { pri: 1.2 } },
+    vit_b5_mg: { all: { pri: 5 } },
+    vit_b9_ug: { all: { pri: 330 } },
+    vit_b12_ug: { all: { pri: 4 } }
 };
 
 /**
  * Función pura que computa las necesidades de micronutrientes del usuario cruzando la data EFSA_DRV.
- * Arquitectura: Mantener esta función pura (sin mutar variables globales ni tocar el DOM) 
- * asegura predictibilidad, testabilidad unitaria y cero dependencias de estado.
  */
 const getUserMicronutrientNeeds = (profile) => {
-    // Valores por defecto seguros (fallback) asumiendo perfil adulto masculino promedio si faltan datos demográficos
     let needs = {
         calcium: EFSA_DRV.calcium_mg.adult_over_25,
         iron:    EFSA_DRV.iron_mg.men_over_18,
-        vitaminC:EFSA_DRV.vitamin_c_mg.men
+        magnesium: EFSA_DRV.magnesium_mg.men,
+        zinc: EFSA_DRV.zinc_mg.men,
+        potassium: EFSA_DRV.potassium_mg.all,
+        selenium: EFSA_DRV.selenium_ug.all,
+        iodine: EFSA_DRV.iodine_ug.all,
+        vitA: EFSA_DRV.vit_a_ug.men,
+        vitD: EFSA_DRV.vit_d_ug.all,
+        vitE: EFSA_DRV.vit_e_mg.men,
+        vitK: EFSA_DRV.vit_k_ug.all,
+        vitaminC: EFSA_DRV.vitamin_c_mg.men,
+        vitB1: EFSA_DRV.vit_b1_mg.men,
+        vitB2: EFSA_DRV.vit_b2_mg.men,
+        vitB3: EFSA_DRV.vit_b3_mg.men,
+        vitB6: EFSA_DRV.vit_b6_mg.men,
+        vitB5: EFSA_DRV.vit_b5_mg.all,
+        vitB9: EFSA_DRV.vit_b9_ug.all,
+        vitB12: EFSA_DRV.vit_b12_ug.all
     };
     
     if (!profile || !profile.age || !profile.gender) {
@@ -574,19 +652,57 @@ const getUserMicronutrientNeeds = (profile) => {
     const age = parseInt(profile.age, 10);
     const isFemale = profile.gender === 'F';
 
-    // Precisión Condicional: Ajustes demográficos basados en edad y sexo.
-    needs.calcium = (age >= 18 && age <= 24) 
-                    ? EFSA_DRV.calcium_mg.adult_18_24 
-                    : EFSA_DRV.calcium_mg.adult_over_25;
+    needs.calcium = (age >= 18 && age <= 24) ? EFSA_DRV.calcium_mg.adult_18_24 : EFSA_DRV.calcium_mg.adult_over_25;
+    needs.vitB5 = EFSA_DRV.vit_b5_mg.all;
 
     if (isFemale) {
-        needs.iron = (age >= 50) 
-                     ? EFSA_DRV.iron_mg.women_over_50 
-                     : EFSA_DRV.iron_mg.women_18_49;
+        needs.iron = (age >= 50) ? EFSA_DRV.iron_mg.women_over_50 : EFSA_DRV.iron_mg.women_18_49;
+        needs.magnesium = EFSA_DRV.magnesium_mg.women;
+        needs.zinc = EFSA_DRV.zinc_mg.women;
+        needs.vitA = EFSA_DRV.vit_a_ug.women;
+        needs.vitE = EFSA_DRV.vit_e_mg.women;
         needs.vitaminC = EFSA_DRV.vitamin_c_mg.women;
-    } else {
-        needs.iron = EFSA_DRV.iron_mg.men_over_18;
-        needs.vitaminC = EFSA_DRV.vitamin_c_mg.men;
+        needs.vitB1 = EFSA_DRV.vit_b1_mg.women;
+        needs.vitB2 = EFSA_DRV.vit_b2_mg.women;
+        needs.vitB3 = EFSA_DRV.vit_b3_mg.women;
+        needs.vitB6 = EFSA_DRV.vit_b6_mg.women;
+    }
+
+    // --- Sport-Based Micronutrient Adjustments ---
+    // Based on ISSN Position Stand (Kerksick et al. 2018), ACSM (Thomas et al. 2016)
+    const sports = profile.sports || {};
+    const sStr = parseInt(sports.strength) || 0;
+    const sEnd = parseInt(sports.endurance) || 0;
+    const sInt = parseInt(sports.intermittent) || 0;
+    const isAthlete = sStr + sEnd + sInt >= 3; // ≥3 sessions/week
+    const isStrength = sStr >= 2;
+    const isEndurance = sEnd >= 2;
+
+    if (isAthlete) {
+        // All athletes: B-vitamins +20% (energy metabolism), VitC +25% (oxidative stress)
+        needs.vitB1 = { pri: Math.round(needs.vitB1.pri * 1.2 * 10) / 10 };
+        needs.vitB2 = { pri: Math.round(needs.vitB2.pri * 1.2 * 10) / 10 };
+        needs.vitB3 = { pri: Math.round(needs.vitB3.pri * 1.2 * 10) / 10 };
+        needs.vitB5 = { pri: Math.round(needs.vitB5.pri * 1.2 * 10) / 10 };
+        needs.vitB6 = { pri: Math.round(needs.vitB6.pri * 1.2 * 10) / 10 };
+        needs.vitaminC = { pri: Math.round(needs.vitaminC.pri * 1.25) };
+        needs.vitE = { pri: Math.round(needs.vitE.pri * 1.2 * 10) / 10 };
+    }
+    if (isEndurance) {
+        // Endurance: Iron +30% (foot-strike hemolysis, sweat loss - Peeling et al. 2008)
+        needs.iron = { pri: Math.round(needs.iron.pri * 1.3 * 10) / 10 };
+        // Magnesium +15% (muscle function - Nielsen & Lukaski 2006)
+        needs.magnesium = { pri: Math.round(needs.magnesium.pri * 1.15) };
+        // Potassium +10% (sweat electrolyte loss)
+        needs.potassium = { pri: Math.round(needs.potassium.pri * 1.1) };
+    }
+    if (isStrength) {
+        // Strength: Zinc +20% (testosterone synthesis, immune - Kilic 2007)
+        needs.zinc = { pri: Math.round(needs.zinc.pri * 1.2 * 10) / 10 };
+        // Magnesium +20% (muscle contraction, protein synthesis - Brilla & Haley 1992)
+        needs.magnesium = { pri: Math.round((needs.magnesium.pri || 350) * 1.2) };
+        // VitD +25% (muscle strength, bone density - Close et al. 2013)
+        needs.vitD = { pri: Math.round(needs.vitD.pri * 1.25 * 10) / 10 };
     }
 
     return needs;
@@ -670,7 +786,41 @@ function evaluateDiet(history) {
     const now = new Date();
     const todayHits = {};
     const weekHits = {};
-    let todayMicros = { calcium: 0, iron: 0, vC: 0 };
+    
+    let todayMicros = {
+        calcium: 0, iron: 0, magnesium: 0, zinc: 0, potassium: 0, selenium: 0, iodine: 0,
+        vitA: 0, vitD: 0, vitE: 0, vitK: 0, vitaminC: 0, vitB1: 0, vitB2: 0, vitB3: 0, vitB5: 0, vitB6: 0, vitB9: 0, vitB12: 0
+    };
+    
+    let todayMacroDetail = { 
+        tdeeActual: 0, proteinActual: 0, carbsActual: 0, fatsActual: 0,
+        fiber: 0, sugars: 0, sat: 0, mono: 0, poly: 0, omega3: 0, omega6: 0, epa: 0, dha: 0 
+    };
+    let todayAminos = { leucine: 0, isoleucine: 0, valine: 0, lysine: 0, methionine: 0, cysteine: 0, phenylalanine: 0, threonine: 0, tryptophan: 0, histidine: 0 };
+    
+    // Safely add micros helper
+    const addMicros = (sourceMicros, multiplier = 1) => {
+        if (!sourceMicros) return;
+        todayMicros.calcium += (sourceMicros.calcium_mg || sourceMicros.calcium || 0) * multiplier;
+        todayMicros.iron += (sourceMicros.iron_mg || sourceMicros.iron || 0) * multiplier;
+        todayMicros.magnesium += (sourceMicros.magnesium_mg || sourceMicros.magnesium || 0) * multiplier;
+        todayMicros.zinc += (sourceMicros.zinc_mg || sourceMicros.zinc || 0) * multiplier;
+        todayMicros.potassium += (sourceMicros.potassium_mg || sourceMicros.potassium || 0) * multiplier;
+        todayMicros.selenium += (sourceMicros.selenium_ug || sourceMicros.selenium || 0) * multiplier;
+        todayMicros.iodine += (sourceMicros.iodine_ug || sourceMicros.iodine || 0) * multiplier;
+        todayMicros.vitA += (sourceMicros.vit_a_ug || sourceMicros.vitA || 0) * multiplier;
+        todayMicros.vitD += (sourceMicros.vit_d_ug || sourceMicros.vitD || 0) * multiplier;
+        todayMicros.vitE += (sourceMicros.vit_e_mg || sourceMicros.vitE || 0) * multiplier;
+        todayMicros.vitK += (sourceMicros.vit_k_ug || sourceMicros.vitK || 0) * multiplier;
+        todayMicros.vitaminC += (sourceMicros.vitamin_c_mg || sourceMicros.vC || sourceMicros.vitaminC || 0) * multiplier;
+        todayMicros.vitB1 += (sourceMicros.vit_b1_mg || sourceMicros.vitB1 || 0) * multiplier;
+        todayMicros.vitB2 += (sourceMicros.vit_b2_mg || sourceMicros.vitB2 || 0) * multiplier;
+        todayMicros.vitB3 += (sourceMicros.vit_b3_mg || sourceMicros.vitB3 || 0) * multiplier;
+        todayMicros.vitB5 += (sourceMicros.vit_b5_mg || sourceMicros.vitB5 || 0) * multiplier;
+        todayMicros.vitB6 += (sourceMicros.vit_b6_mg || sourceMicros.vitB6 || 0) * multiplier;
+        todayMicros.vitB9 += (sourceMicros.vit_b9_ug || sourceMicros.vitB9 || 0) * multiplier;
+        todayMicros.vitB12 += (sourceMicros.vit_b12_ug || sourceMicros.vitB12 || 0) * multiplier;
+    };
     
     Object.keys(CORE_GUIDELINES).forEach(g => {
         todayHits[g] = 0;
@@ -684,7 +834,31 @@ function evaluateDiet(history) {
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         const isThisWeek = diffDays <= 7;
 
-        if (entry.meal) {
+        if (entry.product) {
+            // Direct product logging (V13/V14/V15 OFF & Local DB)
+            if (isToday) {
+                const amountFactor = entry.product.amount_g ? (entry.product.amount_g / 100) : 1;
+                addMicros(entry.product.micros, amountFactor);
+                // Expanded macros
+                const m = entry.product.macros || {};
+                todayMacroDetail.tdeeActual += (entry.product.calories || 0) * amountFactor;
+                todayMacroDetail.proteinActual += (m.pro || 0) * amountFactor;
+                todayMacroDetail.carbsActual += (m.cho || 0) * amountFactor;
+                todayMacroDetail.fatsActual += (m.fat || 0) * amountFactor;
+                todayMacroDetail.fiber += (m.fiber || 0) * amountFactor;
+                todayMacroDetail.sugars += (m.sugars || 0) * amountFactor;
+                todayMacroDetail.sat += (m.sat || 0) * amountFactor;
+                todayMacroDetail.mono += (m.mono || 0) * amountFactor;
+                todayMacroDetail.poly += (m.poly || 0) * amountFactor;
+                todayMacroDetail.omega3 += (m.omega3 || 0) * amountFactor;
+                todayMacroDetail.omega6 += (m.omega6 || 0) * amountFactor;
+                todayMacroDetail.epa += (m.epa || 0) * amountFactor;
+                todayMacroDetail.dha += (m.dha || 0) * amountFactor;
+                // Amino acids
+                const a = entry.product.aminos || {};
+                Object.keys(todayAminos).forEach(k => { todayAminos[k] += (a[k] || 0) * amountFactor; });
+            }
+        } else if (entry.meal) {
             // Legacy mapping for old data in localStorage
             entry.meal.groups.forEach(groupRaw => {
                 let group = groupRaw;
@@ -697,12 +871,8 @@ function evaluateDiet(history) {
                 
                 if (CORE_GUIDELINES[group]) {
                     if (isToday) {
+                        addMicros(PORTIONS_GUIDE[group]?.micros, 1);
                         todayHits[group] += 1;
-                        if (PORTIONS_GUIDE[group] && PORTIONS_GUIDE[group].micros) {
-                            todayMicros.calcium += PORTIONS_GUIDE[group].micros.calcium;
-                            todayMicros.iron += PORTIONS_GUIDE[group].micros.iron;
-                            todayMicros.vC += PORTIONS_GUIDE[group].micros.vC;
-                        }
                     }
                     if (isThisWeek) weekHits[group] += 1;
                 }
@@ -714,11 +884,7 @@ function evaluateDiet(history) {
                 if (CORE_GUIDELINES[group]) {
                     if (isToday) {
                         todayHits[group] += qty;
-                        if (PORTIONS_GUIDE[group] && PORTIONS_GUIDE[group].micros) {
-                            todayMicros.calcium += PORTIONS_GUIDE[group].micros.calcium * qty;
-                            todayMicros.iron += PORTIONS_GUIDE[group].micros.iron * qty;
-                            todayMicros.vC += PORTIONS_GUIDE[group].micros.vC * qty;
-                        }
+                        addMicros(PORTIONS_GUIDE[group]?.micros, qty);
                     }
                     if (isThisWeek) weekHits[group] += qty;
                 }
@@ -726,7 +892,7 @@ function evaluateDiet(history) {
         }
     });
 
-    return { todayHits, weekHits, todayMicros };
+    return { todayHits, weekHits, todayMicros, todayMacroDetail, todayAminos };
 }
 
 function getRecommendations(history) {
@@ -779,10 +945,12 @@ let userProfile = JSON.parse(localStorage.getItem('aesan_profile')) || null;
 let currentView = 'home';
 let activeFilters = []; // For filtering suggestions
 
-const mainContent = document.getElementById('main-content');
-const navButtons = document.querySelectorAll('.nav-btn');
-
 function renderView(viewName) {
+    const mainContent = document.getElementById('main-content');
+    const navButtons = document.querySelectorAll('.nav-btn');
+    
+    if (!mainContent) return; // Wait for DOM
+
     currentView = viewName;
     updateNavButtons(viewName);
     
@@ -796,7 +964,7 @@ function renderView(viewName) {
     // Force user to profile if first time
     if (!userProfile && viewName !== 'profile') {
         alert(t('first_time'));
-        renderView('profile');
+        renderView('options');
         return;
     }
     
@@ -808,7 +976,8 @@ function renderView(viewName) {
             renderSuggestions();
             break;
         case 'profile':
-            renderProfile();
+        case 'options':
+            renderOptions();
             break;
         case 'portions':
             renderPortions();
@@ -820,6 +989,7 @@ function renderView(viewName) {
 }
 
 function updateNavButtons(activeView) {
+    const navButtons = document.querySelectorAll('.nav-btn');
     navButtons.forEach(btn => {
         if (btn.dataset.view === activeView) {
             btn.classList.add('active');
@@ -830,85 +1000,277 @@ function updateNavButtons(activeView) {
 }
 
 // --- View: Products (OFF Search & Timeline) ---
-let lastOFFResult = null;
+let lastSearchResults = [];
 
 function renderProducts() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+    
+    // --- Today's timeline ---
     let timelineHtml = '';
     const now = new Date();
-    
-    // Filter history for products logged today
     const todaysProducts = userHistory.filter(entry => {
         if (!entry.product) return false;
-        const entryDate = new Date(entry.timestamp);
-        return entryDate.toDateString() === now.toDateString();
+        return new Date(entry.timestamp).toDateString() === now.toDateString();
     });
 
-    if (todaysProducts.length === 0) {
-        timelineHtml = \`<div style="color: var(--text-muted); font-size: 14px; padding: 20px; text-align: center; border: 1px dashed rgba(0,0,0,0.1); border-radius: 12px; margin-top: 10px;">\${t('prod_empty')}</div>\`;
-    } else {
-        timelineHtml = \`<div style="display: flex; overflow-x: auto; scroll-snap-type: x mandatory; padding: 10px 0; gap: 12px; -webkit-overflow-scrolling: touch;">\`;
+    if (todaysProducts.length > 0) {
+        let totalCal = 0;
+        let tlItems = '';
         todaysProducts.forEach(entry => {
+            const g = entry.product.amount_g || 100;
+            const cal = Math.round(entry.product.calories * g / 100);
+            totalCal += cal;
             const timeStr = new Date(entry.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            timelineHtml += \`
-                <div style="min-width: 140px; scroll-snap-align: center; background: rgba(255,255,255,0.8); border: 1px solid rgba(0,0,0,0.05); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; align-items: center; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); flex-shrink: 0;">
-                    <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; background: rgba(0,0,0,0.04); padding: 2px 8px; border-radius: 10px;">\${timeStr}</div>
-                    \${entry.product.image ? \`<img src="\${entry.product.image}" style="width: 48px; height: 48px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; border: 1px solid rgba(0,0,0,0.1);">\` : \`<div style="font-size: 24px; margin-bottom: 8px;">📦</div>\`}
-                    <div style="font-size: 13px; font-weight: bold; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 4px;">\${entry.product.name}</div>
-                    <div style="font-size: 12px; color: var(--primary-color); font-weight: 600;">\${Math.round(entry.product.calories)} kcal</div>
-                </div>\`;
-        });
-        timelineHtml += \`</div>\`;
-    }
-
-    let searchResultHtml = '';
-    if (lastOFFResult) {
-        searchResultHtml = \`
-            <div style="background: white; border-radius: 12px; padding: 16px; margin-top: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid var(--primary-light);">
-                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
-                    \${lastOFFResult.image ? \`<img src="\${lastOFFResult.image}" style="width: 60px; height: 60px; object-fit: cover; border-radius: 8px;">\` : \`<div style="font-size: 32px;">📦</div>\`}
-                    <div>
-                        <h4 style="margin: 0 0 4px 0; font-size: 16px;">\${lastOFFResult.name}</h4>
-                        <div style="font-size: 12px; color: var(--text-muted);">\${Math.round(lastOFFResult.calories)} \${t('prod_cal')}</div>
+            const displayMeasure = entry.product.measure_text || `${g}g`;
+            tlItems += `
+                <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,0.04);">
+                    <div style="font-size: 20px; width: 36px; text-align: center;">${entry.product.image ? '' : '📦'}</div>
+                    ${entry.product.image ? `<img src="${entry.product.image}" style="width: 36px; height: 36px; object-fit: cover; border-radius: 6px;">` : ''}
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${entry.product.name}</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">${displayMeasure} · ${timeStr}</div>
                     </div>
+                    <div style="font-size: 13px; font-weight: 700; color: var(--primary-color); white-space: nowrap;">${cal} kcal</div>
+                </div>`;
+        });
+        timelineHtml = `
+            <div class="glass-card" style="padding: 16px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h3 style="margin: 0; font-size: 16px;">Diario de Hoy</h3>
+                    <span style="font-size: 14px; font-weight: 700; color: var(--primary-color);">${totalCal} kcal</span>
                 </div>
-                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(0,0,0,0.05);">
-                    <div style="text-align: center;"><strong>PRO</strong><br>\${Math.round(lastOFFResult.macros.pro)}g</div>
-                    <div style="text-align: center;"><strong>CHO</strong><br>\${Math.round(lastOFFResult.macros.cho)}g</div>
-                    <div style="text-align: center;"><strong>AAGG</strong><br>\${Math.round(lastOFFResult.macros.fat)}g</div>
-                </div>
-                <button onclick="logOFFProduct()" class="btn btn-primary" style="width: 100%; border-radius: 8px; padding: 12px; font-weight: bold;">+ \${t('prod_logging')}</button>
-            </div>
-        \`;
+                ${tlItems}
+            </div>`;
     }
 
-    let html = \`
-        <h2>\${t('prod_title')} 🔍</h2>
-        <p style="margin-bottom: 20px; color: var(--text-muted); font-size: 14px; line-height: 1.5;">\${t('prod_desc')}</p>
+    // --- Search results list (MacroFactor style grouping) ---
+    let searchResultHtml = '';
+    if (lastSearchResults && lastSearchResults.length > 0) {
         
-        <div class="glass-card" style="padding: 16px; margin-bottom: 24px;">
-            <div style="display: flex; gap: 8px;">
-                <input type="text" id="off-search-input" placeholder="\${t('prod_search_ph')}" style="flex: 1; padding: 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); font-size: 15px; font-family: inherit;">
-                <button onclick="handleOFFSearch()" class="btn btn-primary" style="padding: 12px 16px; border-radius: 8px; border: none; background: var(--primary-color); color: white; display:flex; align-items:center; justify-content:center;">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                </button>
-            </div>
+        // 1. Group results by base name
+        const groupedResults = {};
+        lastSearchResults.forEach((res, index) => {
+            // e.g. "Pollo Pechuga Sin piel (Frito)" -> match[1]="Pollo Pechuga Sin piel", match[2]="Frito"
+            const match = res.name.match(/^(.*?)\s*(\((.*?)\))?$/);
+            let baseName = match && match[1] ? match[1].trim() : res.name;
+            let variation = match && match[3] ? match[3].trim() : "Estándar";
             
-            <div id="off-loading-state" style="display: none; text-align: center; padding: 20px; color: var(--primary-light);">
-                <span class="spinner" style="display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(0,0,0,0.1); border-radius: 50%; border-top-color: var(--primary-color); animation: spin 1s ease-in-out infinite;"></span>
-                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
-                <div style="margin-top: 8px; font-size: 13px; font-weight: 500;">Buscando...</div>
-            </div>
+            if (!groupedResults[baseName]) {
+                groupedResults[baseName] = { items: [], baseImg: res.image || '📦' };
+            }
+            groupedResults[baseName].items.push({ OriginalIndex: index, item: res, variantName: variation });
+        });
 
-            <div id="off-search-result-container">
-                \${searchResultHtml}
+        // 2. Render groups
+        let listItems = '';
+        Object.keys(groupedResults).forEach((groupName, groupIndex) => {
+            const group = groupedResults[groupName];
+            
+            // Render the Parent Row
+            listItems += `
+                <div id="sr-group-${groupIndex}" onclick="window.expandGroup(${groupIndex})" class="search-parent-row" style="display: flex; align-items: center; gap: 12px; padding: 12px 10px; border-bottom: 1px solid rgba(0,0,0,0.04); cursor: pointer; transition: background 0.15s; border-radius: 8px;">
+                    <div style="font-size: 22px; width: 36px; text-align: center; flex-shrink: 0;">
+                        ${group.baseImg !== '📦' ? `<img src="${group.baseImg}" style="width: 36px; height: 36px; object-fit: cover; border-radius: 6px;">` : '📦'}
+                    </div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-main);">${groupName}</div>
+                        <div style="font-size: 11px; color: var(--text-muted);">${group.items.length} variaciones</div>
+                    </div>
+                    <div style="color: var(--primary-color); font-size: 18px; flex-shrink: 0; transition: transform 0.2s;" id="sr-group-icon-${groupIndex}">▾</div>
+                </div>
+                
+                <div id="sr-group-variations-${groupIndex}" class="variations-container" style="display: none; padding-left: 12px; margin-bottom: 4px;">`;
+                
+            // Render Children Rows (Variations)
+            group.items.forEach((variant) => {
+                const globalIndex = variant.OriginalIndex;
+                const vItem = variant.item;
+                listItems += `
+                    <div id="sr-row-${globalIndex}" onclick="window.expandResult(${globalIndex})" class="search-child-row" style="display: flex; align-items: center; gap: 10px; padding: 10px 8px 10px 32px; border-bottom: 1px solid rgba(0,0,0,0.02); cursor: pointer; position: relative;">
+                        <!-- L-Bracket connector -->
+                        <div style="position: absolute; left: 16px; top: -10px; bottom: 50%; width: 10px; border-left: 2px solid var(--glass-border); border-bottom: 2px solid var(--glass-border); border-bottom-left-radius: 4px;"></div>
+                        
+                        <div style="flex: 1; min-width: 0;">
+                            <div style="font-size: 13px; font-weight: 500; color: var(--text-main);"><span class="variation-badge">Prep:</span> ${variant.variantName}</div>
+                        </div>
+                        <div style="text-align: right; flex-shrink: 0;">
+                            <div style="font-size: 13px; font-weight: 700; color: var(--text-main);">${Math.round(vItem.calories)}</div>
+                            <div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase;">kcal / 100g</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Detail expanding box for this specific variant -->
+                    <div id="sr-detail-${globalIndex}" style="display: none; padding-left: 20px;"></div>
+                `;
+            });
+            
+            listItems += `</div>`; // Close variations container
+        });
+
+        searchResultHtml = `
+            <div class="glass-card" style="padding: 4px 12px; margin-top: 12px;">
+                <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); padding: 10px 4px 4px 4px; font-weight: 600;">Resultados (${lastSearchResults.length})</div>
+                ${listItems}
+            </div>`;
+    }
+
+    let html = `
+        <div style="margin-bottom: 16px;">
+            <h2 style="margin-bottom: 4px;">Registro</h2>
+            <p style="color: var(--text-muted); font-size: 13px; margin: 0;">Busca y registra lo que comes</p>
+        </div>
+        
+        <div style="position: sticky; top: 0; z-index: 50; padding: 8px 0; background: var(--bg-gradient);">
+            <div style="position: relative;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 14px; top: 50%; transform: translateY(-50%); pointer-events: none;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" id="off-search-input" class="search-input" placeholder="${t('prod_search_ph')}" 
+                    onkeydown="if(event.key==='Enter') handleOFFSearch()" 
+                    style="width: 100%; padding: 14px 14px 14px 42px; border-radius: 14px; font-size: 16px; font-family: inherit; margin: 0; box-shadow: 0 4px 20px rgba(0,0,0,0.08);">
             </div>
         </div>
 
-        <h3 style="margin-bottom: 12px;">\${t('prod_timeline')} ⏱️</h3>
-        \${timelineHtml}
-    \`;
+        <div id="off-loading-state" style="display: none; text-align: center; padding: 30px; color: var(--primary-light);">
+            <span class="spinner" style="display: inline-block; width: 28px; height: 28px; border: 3px solid rgba(0,0,0,0.1); border-radius: 50%; border-top-color: var(--primary-color); animation: spin 1s ease-in-out infinite;"></span>
+            <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+            <div style="margin-top: 10px; font-size: 14px; font-weight: 500;">Buscando...</div>
+        </div>
+
+        <div id="off-search-result-container">
+            ${searchResultHtml}
+        </div>
+
+        ${timelineHtml}
+
+        ${todaysProducts.length === 0 && (!lastSearchResults || lastSearchResults.length === 0) ? `
+            <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+                <div style="font-size: 48px; margin-bottom: 16px; opacity: 0.5;">🍽️</div>
+                <p style="font-size: 15px; font-weight: 500; margin-bottom: 4px;">Empieza a registrar</p>
+                <p style="font-size: 13px;">Busca alimentos arriba para añadir a tu diario</p>
+            </div>` : ''}
+    `;
 
     mainContent.innerHTML = html;
+
+    // Expand Group accordion
+    window.expandGroup = (groupIndex) => {
+        const varContainer = document.getElementById(`sr-group-variations-${groupIndex}`);
+        const icon = document.getElementById(`sr-group-icon-${groupIndex}`);
+        if (!varContainer || !icon) return;
+        
+        if (varContainer.style.display === 'block') {
+            varContainer.style.display = 'none';
+            icon.style.transform = '';
+        } else {
+            // Collapse other groups optionally, or keep multiple open. Macrofactor keeps others open usually, but let's make it cleaner by opening one at a time.
+            document.querySelectorAll('.variations-container').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('div[id^="sr-group-icon-"]').forEach(el => el.style.transform = '');
+            
+            varContainer.style.display = 'block';
+            icon.style.transform = 'rotate(180deg)';
+        }
+    };
+
+    // Expand specific Variation Macro details
+    window.expandResult = (index) => {
+        const detail = document.getElementById(`sr-detail-${index}`);
+        if (!detail || !lastSearchResults[index]) return;
+
+        // Collapse all others globally
+        lastSearchResults.forEach((_, i) => {
+            if (i !== index) {
+                const other = document.getElementById(`sr-detail-${i}`);
+                if (other) other.style.display = 'none';
+            }
+        });
+
+        // Toggle this one
+        if (detail.style.display === 'block') {
+            detail.style.display = 'none';
+            return;
+        }
+
+        const res = lastSearchResults[index];
+        detail.innerHTML = `
+            <div style="padding: 14px; background: rgba(99,102,241,0.06); border-radius: 12px; margin: 4px 0 16px 0; border: 1px solid rgba(99,102,241,0.15); animation: fadeIn 0.15s ease-out;">
+                <div style="display: flex; justify-content: space-around; text-align: center; margin-bottom: 14px;">
+                    <div><div style="font-size: 18px; font-weight: 800; color: var(--primary-color);" id="dyn-pro-${index}">${res.macros.pro.toFixed(1)}</div><div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Pro</div></div>
+                    <div><div style="font-size: 18px; font-weight: 800; color: #f59e0b;" id="dyn-cho-${index}">${res.macros.cho.toFixed(1)}</div><div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">HC</div></div>
+                    <div><div style="font-size: 18px; font-weight: 800; color: #ef4444;" id="dyn-fat-${index}">${res.macros.fat.toFixed(1)}</div><div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Grasa</div></div>
+                    <div><div style="font-size: 18px; font-weight: 800;" id="dyn-cal-${index}">${Math.round(res.calories)}</div><div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; font-weight: 600;">kcal</div></div>
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; background: var(--card-bg); padding: 6px 10px; border-radius: 8px; border: 1px solid var(--glass-border);">
+                    <span style="font-size: 14px;">⚖️</span>
+                    <input type="number" id="prod-weight-${index}" value="100" min="0.1" max="5000" step="any" 
+                        oninput="window.updateDynMacros(${index})"
+                        style="flex: 1; padding: 4px; text-align: center; font-size: 16px; font-weight: 700; margin: 0; border: none; outline: none; background: transparent; width: 60px;">
+                    
+                    <select id="prod-unit-${index}" onchange="window.handleUnitChange(${index})" style="margin: 0; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--glass-border); background: var(--bg-color); font-size: 13px; font-weight: 600; color: var(--text-main); flex: 2; cursor: pointer; height: auto;">
+                        <option value="1" data-name="Gramos">Gramos (g)</option>
+                        ${(res.measures || []).map(m => `<option value="${m.grams}" data-name="${m.name}">${m.name} (${m.grams}g)</option>`).join('')}
+                    </select>
+                </div>
+
+                <div style="display: flex; gap: 4px; margin-bottom: 12px;">
+                    <button onclick="window.quickWeight(${index}, 100)" style="flex:1; padding: 6px; border: 1px solid var(--primary-color); border-radius: 6px; background: rgba(99,102,241,0.1); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--primary-color);">100g</button>
+                    <button onclick="window.quickWeight(${index}, 150)" style="flex:1; padding: 6px; border: 1px solid var(--glass-border); border-radius: 6px; background: var(--card-bg); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text-main);">150g</button>
+                    <button onclick="window.quickWeight(${index}, 200)" style="flex:1; padding: 6px; border: 1px solid var(--glass-border); border-radius: 6px; background: var(--card-bg); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text-main);">200g</button>
+                    <button onclick="window.quickWeight(${index}, 300)" style="flex:1; padding: 6px; border: 1px solid var(--glass-border); border-radius: 6px; background: var(--card-bg); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text-main);">300g</button>
+                </div>
+
+                <button onclick="logProduct(${index})" style="width: 100%; border-radius: 8px; border: none; background: var(--secondary-color); color: white; padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(16,185,129,0.3); display: flex; align-items: center; justify-content: center; gap: 6px;">
+                    ✓ Registrar Porción
+                </button>
+            </div>`;
+        detail.style.display = 'block';
+    };
+
+    // Handle unit dropdown change (switch from Grams to Large Breast, etc.)
+    window.handleUnitChange = (index) => {
+        const input = document.getElementById(`prod-weight-${index}`);
+        const select = document.getElementById(`prod-unit-${index}`);
+        if (!input || !select) return;
+        
+        // When switching units, default to 1 unit if it's a qualitative measure, 100 if grams
+        if (select.value === "1") {
+            input.value = 100;
+        } else {
+            input.value = 1;
+        }
+        window.updateDynMacros(index);
+    };
+
+    // Dynamic macro recalculation on weight change or unit change
+    window.updateDynMacros = (index) => {
+        const res = lastSearchResults[index];
+        const input = document.getElementById(`prod-weight-${index}`);
+        const select = document.getElementById(`prod-unit-${index}`);
+        if (!res || !input || !select) return;
+        
+        const quantity = parseFloat(input.value) || 0;
+        const unitGrams = parseFloat(select.value) || 1;
+        
+        const totalGrams = quantity * unitGrams;
+        const f = totalGrams / 100;
+        
+        document.getElementById(`dyn-pro-${index}`).textContent = (res.macros.pro * f).toFixed(1);
+        document.getElementById(`dyn-cho-${index}`).textContent = (res.macros.cho * f).toFixed(1);
+        document.getElementById(`dyn-fat-${index}`).textContent = (res.macros.fat * f).toFixed(1);
+        document.getElementById(`dyn-cal-${index}`).textContent = Math.round(res.calories * f);
+    };
+
+    // Quick weight presets
+    window.quickWeight = (index, grams) => {
+        const input = document.getElementById(`prod-weight-${index}`);
+        const select = document.getElementById(`prod-unit-${index}`);
+        if (input && select) { 
+            // Force back to Grams mode for quick weights
+            select.value = "1";
+            input.value = grams; 
+            window.updateDynMacros(index); 
+        }
+    };
 }
 
 // Handlers for Products View
@@ -921,15 +1283,15 @@ async function handleOFFSearch() {
     document.getElementById('off-search-result-container').innerHTML = '';
     document.getElementById('off-loading-state').style.display = 'block';
 
-    const result = await fetchOFFProduct(query);
+    const results = await searchProducts(query);
     
     document.getElementById('off-loading-state').style.display = 'none';
 
-    if (result) {
-        lastOFFResult = result;
+    if (results && results.length > 0) {
+        lastSearchResults = results;
     } else {
-        lastOFFResult = null;
-        document.getElementById('off-search-result-container').innerHTML = \`<div style="color: var(--accent-color); font-size: 14px; padding: 16px; text-align: center; background: rgba(255,0,0,0.05); border-radius: 12px; margin-top: 16px;">No se encontró ningún producto exacto. Intenta ser más específico.</div>\`;
+        lastSearchResults = [];
+        document.getElementById('off-search-result-container').innerHTML = `<div style="color: var(--accent-color); font-size: 14px; padding: 16px; text-align: center; background: rgba(255,0,0,0.05); border-radius: 12px; margin-top: 16px;">No se encontró ningún producto. Inténtalo con sinónimos.</div>`;
         return;
     }
     
@@ -937,24 +1299,42 @@ async function handleOFFSearch() {
     renderProducts();
 }
 
-function logOFFProduct() {
-    if (!lastOFFResult) return;
+function logProduct(index) {
+    if (!lastSearchResults || lastSearchResults.length <= index) return;
 
+    const selectedProduct = lastSearchResults[index];
+    const input = document.getElementById(`prod-weight-${index}`);
+    const select = document.getElementById(`prod-unit-${index}`);
+    
+    const quantity = input ? (parseFloat(input.value) || 100) : 100;
+    const unitGrams = select ? (parseFloat(select.value) || 1) : 1;
+    const totalGrams = quantity * unitGrams;
+    
+    // Construct display text for the timeline
+    let measureText = `${totalGrams}g`;
+    if (select && select.value !== "1") {
+        const unitName = select.options[select.selectedIndex].getAttribute('data-name');
+        measureText = `${quantity}x ${unitName} (${totalGrams}g)`;
+    }
+    
     const record = {
         timestamp: new Date().toISOString(),
-        product: lastOFFResult // Format V13
+        product: { ...selectedProduct, amount_g: totalGrams, measure_text: measureText }
     };
     
     userHistory.unshift(record);
     localStorage.setItem('aesan_history', JSON.stringify(userHistory));
     
-    // Clear search and show success
-    lastOFFResult = null;
-    window.showCustomModal('Exito ✅', 'Producto registrado en tu diario de consumo.');
+    lastSearchResults = [];
+    document.getElementById('off-search-input').value = '';
+    window.showToast(`✅ ${selectedProduct.name} registrado`);
     renderProducts();
 }
 
 function renderHome() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+
     const recommendations = getRecommendations(userHistory);
     const state = evaluateDiet(userHistory);
     
@@ -1031,40 +1411,240 @@ function renderHome() {
             </div>
         </div>
 
-        <h3 style="margin-bottom: 12px;">Micronutrientes Críticos (EFSA)</h3>
-        <p style="font-size: 11px; margin-top: -8px; margin-bottom: 12px; color: var(--text-muted); line-height: 1.3;">
-            Estimación basada en porciones diarias.<br>El target ("PRI" o Ingesta Diaria Recomendada) se calcula según tu perfil activo.
-        </p>
-        <div class="glass-card" style="padding: 14px 12px; margin-bottom: 24px;">
-            <div style="display: flex; flex-direction: column; gap: 12px;">
+        <!-- 1. Energía y Macronutrientes Básicos -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                EFSA: Energía y Macronutrientes Básicos 🔬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+                ${(() => {
+                    const md = state.todayMacroDetail;
+                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type, specificColor) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 0;
+                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
+                        
+                        let barColor = specificColor || 'var(--accent-color)'; 
+                        if (!specificColor) {
+                            if (type === 'max') {
+                                barColor = 'var(--secondary-color)'; 
+                                if (percent >= 80) barColor = '#fbbf24'; 
+                                if (percent >= 100) barColor = 'var(--accent-color)'; 
+                            } else if (type === 'min' || type === 'target') {
+                                barColor = 'var(--accent-color)'; 
+                                if (percent >= 50) barColor = '#fbbf24'; 
+                                if (percent >= 80) barColor = 'var(--secondary-color)';
+                            }
+                        }
+
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    
+                    return `
+                        ${renderBarEFSA('Energía (AR)', '🔥', md.tdeeActual, energy.tdee, 'kcal', 'target')}
+                        ${renderBarEFSA('Proteínas (PRI)', '🥩', md.proteinActual, energy.proteinGrams, 'g', 'target')}
+                        ${renderBarEFSA('Carbohidratos (RI)', '🍚', md.carbsActual, energy.carbsGrams, 'g', 'target')}
+                        ${renderBarEFSA('Grasas Totales (RI)', '🥑', md.fatsActual, energy.fatsGrams, 'g', 'target')}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 2. Carbohidratos y Fibra Dietética -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                EFSA: Carbohidratos y Fibra Dietética 🌾 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+                ${(() => {
+                    const md = state.todayMacroDetail;
+                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 0;
+                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
+                        let barColor = type === 'max' ? 'var(--secondary-color)' : 'var(--accent-color)';
+                        if (type === 'max') { if (percent >= 80) barColor = '#fbbf24'; if (percent >= 100) barColor = 'var(--accent-color)'; }
+                        else { if (percent >= 50) barColor = '#fbbf24'; if (percent >= 80) barColor = 'var(--secondary-color)'; }
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    const fiberGoal = 25; // EFSA AI
+                    const sugarMax = 25; // WHO/EFSA Upper Limit indicator
+                    return `
+                        ${renderBarEFSA('Fibra Dietética (AI)', '🌾', md.fiber, fiberGoal, 'g', 'min')}
+                        ${renderBarEFSA('Azúcares Totales (Límite)', '🍬', md.sugars, sugarMax, 'g', 'max')}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 3. Grasas y Perfil Lipídico -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                EFSA: Grasas y Perfil Lipídico 🥑 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+                ${(() => {
+                    const md = state.todayMacroDetail;
+                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type, essential) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 0;
+                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
+                        let barColor = type === 'max' ? 'var(--secondary-color)' : 'var(--accent-color)';
+                        if (type === 'max') { if (percent >= 80) barColor = '#fbbf24'; if (percent >= 100) barColor = 'var(--accent-color)'; }
+                        else { if (percent >= 50) barColor = '#fbbf24'; if (percent >= 80) barColor = 'var(--secondary-color)'; }
+                        if (essential && percent >= 80) barColor = 'var(--primary-color)';
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    
+                    const tdee = energy.tdee || 2000;
+                    const satMax = Math.round((tdee * 0.10) / 9); 
+                    const monoTarget = Math.round((tdee * 0.15) / 9); 
+                    const polyTarget = Math.round((tdee * 0.07) / 9); 
+                    
+                    return `
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Desglose Lipídico</div>
+                        ${renderBarEFSA('Saturadas (Límite <10%)', '🧈', md.sat, satMax, 'g', 'max', false)}
+                        ${renderBarEFSA('Monoinsaturadas (Target)', '🫒', md.mono, monoTarget, 'g', 'min', false)}
+                        ${renderBarEFSA('Poliinsaturadas (Target)', '🥜', md.poly, polyTarget, 'g', 'min', false)}
+                        
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-top: 12px; margin-bottom: -4px;">Ácidos Grasos Esenciales</div>
+                        ${renderBarEFSA('Omega-6 LA (AI)', '⚡', md.omega6, 10, 'g', 'min', true)}
+                        ${renderBarEFSA('Omega-3 ALA (AI)', '💧', md.omega3, 2, 'g', 'min', true)}
+                        ${renderBarEFSA('EPA + DHA (AI/RTI)', '🐠', md.epa + md.dha, 0.25, 'g', 'min', true)}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 4. Vitaminas -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                EFSA: Requerimientos de Vitaminas ☀️ <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
                 ${(() => {
                     const micros = getUserMicronutrientNeeds(userProfile);
                     const current = state.todayMicros;
-                    const renderBar = (label, icon, currentVal, targetVal, unit) => {
-                        const percent = Math.min(100, (currentVal / targetVal) * 100);
-                        let barColor = 'var(--accent-color)'; // Red
-                        if (percent >= 50) barColor = '#fbbf24'; // Yellow
-                        if (percent >= 80) barColor = 'var(--secondary-color)'; // Green
-                        
-                        return `
-                            <div>
-                                <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; font-weight: 500;">
-                                    <span>${icon} ${label}</span>
-                                    <span>${Math.round(currentVal)} / ${targetVal} ${unit} (${Math.round(percent)}%)</span>
-                                </div>
-                                <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.05); border-radius: 4px; overflow: hidden;">
-                                    <div style="width: ${percent}%; height: 100%; background: ${barColor}; border-radius: 4px; transition: width 0.5s ease;"></div>
-                                </div>
-                            </div>
-                        `;
+                    const renderBarMicro = (label, icon, currentVal, targetVal, unit) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 1; // Fallback to 1 to prevent div by zero
+                        const percent = Math.min(100, (val / tVal) * 100);
+                        let barColor = 'var(--accent-color)'; 
+                        if (percent >= 50) barColor = '#fbbf24'; 
+                        if (percent >= 80) barColor = 'var(--secondary-color)';
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${Math.round(val)} / ${Math.round(tVal)} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
                     };
-                    
-                    return renderBar('Calcio', '🦴', current.calcium, micros.calcium.pri, 'mg') +
-                           renderBar('Hierro', '🩸', current.iron, micros.iron.pri, 'mg') +
-                           renderBar('Vitamina C', '🍊', current.vC, micros.vitaminC.pri, 'mg');
+                    return `
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Liposolubles</div>
+                        ${renderBarMicro('Vitamina A (PRI)', '👁️', current.vitA, micros.vitA.pri, 'µg')}
+                        ${renderBarMicro('Vitamina D (AI)', '☀️', current.vitD, micros.vitD.pri, 'µg')}
+                        ${renderBarMicro('Vitamina E (AI)', '🥑', current.vitE, micros.vitE.pri, 'mg')}
+                        ${renderBarMicro('Vitamina K (AI)', '🥬', current.vitK, micros.vitK.pri, 'µg')}
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-top: 12px; margin-bottom: -4px;">Hidrosolubles</div>
+                        ${renderBarMicro('Vitamina C (PRI)', '🍊', current.vitaminC, micros.vitaminC.pri, 'mg')}
+                        ${renderBarMicro('B1 Tiamina (PRI)', '🌾', current.vitB1, micros.vitB1.pri, 'mg')}
+                        ${renderBarMicro('B2 Riboflavina (PRI)', '🥛', current.vitB2, micros.vitB2.pri, 'mg')}
+                        ${renderBarMicro('B3 Niacina (PRI)', '🥜', current.vitB3, micros.vitB3.pri, 'mg')}
+                        ${renderBarMicro('B5 Pantoténico (AI)', '🥚', current.vitB5, micros.vitB5.pri, 'mg')}
+                        ${renderBarMicro('B6 Piridoxina (PRI)', '🥩', current.vitB6, micros.vitB6.pri, 'mg')}
+                        ${renderBarMicro('B9 Ácido Fólico (PRI)', '🥦', current.vitB9, micros.vitB9.pri, 'µg')}
+                        ${renderBarMicro('B12 Cobalamina (AI)', '🐟', current.vitB12, micros.vitB12.pri, 'µg')}
+                    `;
                 })()}
             </div>
-        </div>
+        </details>
+
+        <!-- 5. Minerales -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                EFSA: Elementos y Minerales Traza 🪨 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+                ${(() => {
+                    const micros = getUserMicronutrientNeeds(userProfile);
+                    const current = state.todayMicros;
+                    const renderBarMicro = (label, icon, currentVal, targetVal, unit) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 1; // Fallback
+                        const percent = Math.min(100, (val / tVal) * 100);
+                        let barColor = 'var(--accent-color)'; 
+                        if (percent >= 50) barColor = '#fbbf24'; 
+                        if (percent >= 80) barColor = 'var(--secondary-color)';
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${Math.round(val)} / ${Math.round(tVal)} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    return `
+                        ${renderBarMicro('Calcio (PRI)', '🦴', current.calcium, micros.calcium.pri, 'mg')}
+                        ${renderBarMicro('Hierro (PRI)', '🩸', current.iron, micros.iron.pri, 'mg')}
+                        ${renderBarMicro('Magnesio (AI)', '⚡', current.magnesium, micros.magnesium.pri, 'mg')}
+                        ${renderBarMicro('Zinc (PRI)', '🛡️', current.zinc, micros.zinc.pri, 'mg')}
+                        ${renderBarMicro('Potasio (AI)', '🍌', current.potassium, micros.potassium.pri, 'mg')}
+                        ${renderBarMicro('Selenio (AI)', '🌱', current.selenium, micros.selenium.pri, 'µg')}
+                        ${renderBarMicro('Yodo (AI)', '🌊', current.iodine, micros.iodine.pri, 'µg')}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 6. Aminoácidos Esenciales -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                EFSA: Aminoácidos Esenciales 🧬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+                ${(() => {
+                    const am = state.todayAminos;
+                    const w = (userProfile && userProfile.weight) ? parseFloat(userProfile.weight) : 70; // Safe fallback
+                    const sp = (userProfile && userProfile.sports) || {};
+                    const sStr = parseInt(sp.strength) || 0;
+                    const sEnd = parseInt(sp.endurance) || 0;
+                    const sInt = parseInt(sp.intermittent) || 0;
+                    
+                    let aaMultiplier = 1.0;
+                    if (sStr >= 2 && sEnd >= 2) aaMultiplier = 1.4;
+                    else if (sStr >= 2) aaMultiplier = 1.3;
+                    else if (sEnd >= 2) aaMultiplier = 1.2;
+                    else if (sStr + sEnd + sInt >= 3) aaMultiplier = 1.15;
+
+                    const eaaPRI = {
+                        leucine:       Math.round(39 * w * aaMultiplier),
+                        isoleucine:    Math.round(20 * w * aaMultiplier),
+                        valine:        Math.round(26 * w * aaMultiplier),
+                        lysine:        Math.round(30 * w * aaMultiplier),
+                        methionine:    Math.round(15 * w * aaMultiplier),
+                        cysteine:      Math.round(4 * w * aaMultiplier),
+                        phenylalanine: Math.round(25 * w * aaMultiplier),
+                        threonine:     Math.round(15 * w * aaMultiplier),
+                        tryptophan:    Math.round(4 * w * aaMultiplier),
+                        histidine:     Math.round(10 * w * aaMultiplier)
+                    };
+
+                    const sportLabel = aaMultiplier > 1 ? `(×${aaMultiplier} deportista)` : '(sedentario)';
+
+                    const renderBarA = (label, currentVal, targetVal) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 1;
+                        const percent = Math.min(100, (val / tVal) * 100);
+                        let barColor = 'var(--accent-color)';
+                        if (percent >= 50) barColor = '#fbbf24';
+                        if (percent >= 80) barColor = 'var(--secondary-color)';
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${label}</span><span>${Math.round(val)} / ${tVal} mg <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    return `
+                        <p style="font-size:11px;color:var(--text-muted);margin-top:-4px;margin-bottom:8px;">Requisito EFSA/ISSN ajustado a peso: ${w}kg ${sportLabel}</p>
+                        ${renderBarA('Leucina', am.leucine, eaaPRI.leucine)}
+                        ${renderBarA('Isoleucina', am.isoleucine, eaaPRI.isoleucine)}
+                        ${renderBarA('Valina', am.valine, eaaPRI.valine)}
+                        ${renderBarA('Lisina', am.lysine, eaaPRI.lysine)}
+                        ${renderBarA('Metionina', am.methionine, eaaPRI.methionine)}
+                        ${renderBarA('Cisteína', am.cysteine, eaaPRI.cysteine)}
+                        ${renderBarA('Fenilalanina', am.phenylalanine, eaaPRI.phenylalanine)}
+                        ${renderBarA('Treonina', am.threonine, eaaPRI.threonine)}
+                        ${renderBarA('Triptófano', am.tryptophan, eaaPRI.tryptophan)}
+                        ${renderBarA('Histidina', am.histidine, eaaPRI.histidine)}
+                    `;
+                })()}
+            </div>
+        </details>
 
         <div class="glass-card" style="padding: 12px 16px; margin-bottom: 24px; display: flex; align-items: flex-start; gap: 12px; background: rgba(255,255,255,0.6);">
 
@@ -1154,6 +1734,9 @@ function renderHome() {
 }
 
 function renderSuggestions() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+
     let recommendations = getRecommendations(userHistory);
 
     // If filters are active, prioritize those groups in local search
@@ -1352,6 +1935,9 @@ function renderSuggestions() {
 }
 
 function renderPortions() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+
     // Load today's accumulated portions from localStorage
     const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     let todayPortions = JSON.parse(localStorage.getItem('aesan_today_portions') || '{}');
@@ -1459,14 +2045,103 @@ window.registerMealPortions = (portionBreakdown) => {
     if (currentView === 'portions') renderPortions();
 };
 
+// --- Options View (contains Profile + Bibliography) ---
+let activeOptionTab = 'profile';
+
+function renderOptions() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+
+    const profileActive = activeOptionTab === 'profile';
+    const biblioActive = activeOptionTab === 'bibliography';
+
+    mainContent.innerHTML = `
+        <h2>⚙️ Opciones</h2>
+        <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+            <button onclick="window.switchOptionTab('profile')" style="flex: 1; padding: 10px; border-radius: 10px; border: 2px solid ${profileActive ? 'var(--primary-color)' : 'var(--glass-border)'}; background: ${profileActive ? 'rgba(99,102,241,0.1)' : 'var(--card-bg)'}; color: ${profileActive ? 'var(--primary-color)' : 'var(--text-main)'}; font-size: 14px; font-weight: 600; cursor: pointer;">
+                👤 Perfil
+            </button>
+            <button onclick="window.switchOptionTab('bibliography')" style="flex: 1; padding: 10px; border-radius: 10px; border: 2px solid ${biblioActive ? 'var(--primary-color)' : 'var(--glass-border)'}; background: ${biblioActive ? 'rgba(99,102,241,0.1)' : 'var(--card-bg)'}; color: ${biblioActive ? 'var(--primary-color)' : 'var(--text-main)'}; font-size: 14px; font-weight: 600; cursor: pointer;">
+                📚 Bibliografía
+            </button>
+        </div>
+        <div id="options-content"></div>
+    `;
+
+    window.switchOptionTab = (tab) => {
+        activeOptionTab = tab;
+        renderOptions();
+    };
+
+    if (profileActive) {
+        renderProfileContent(document.getElementById('options-content'));
+    } else {
+        renderBibliography(document.getElementById('options-content'));
+    }
+}
+
+function renderBibliography(container) {
+    container.innerHTML = `
+        <div class="glass-card" style="padding: 20px;">
+            <h3 style="margin-top: 0; margin-bottom: 16px;">📚 Bibliografía Científica</h3>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 20px;">Todas las referencias científicas utilizadas para los cálculos nutricionales, recomendaciones y valores de referencia de esta aplicación.</p>
+
+            <div style="font-size: 12px; font-weight: 700; color: var(--primary-color); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Organismos Oficiales</div>
+            <ul style="font-size: 13px; line-height: 1.8; padding-left: 16px; margin-bottom: 20px; color: var(--text-main);">
+                <li><strong>EFSA (2017).</strong> Dietary Reference Values for nutrients. EFSA Journal, 15(11), e04991. — <em>Vitaminas, minerales, aminoácidos (PRI/AI)</em></li>
+                <li><strong>EFSA NDA Panel (2012).</strong> Scientific Opinion on Dietary Reference Values for protein. EFSA Journal, 10(2), 2557. — <em>Aminoácidos esenciales mg/kg/día</em></li>
+                <li><strong>AESAN / BEDCA (2023).</strong> Base de Datos Española de Composición de Alimentos. bedca.net — <em>Composición nutricional de 48 alimentos locales</em></li>
+                <li><strong>OMS/WHO (2015).</strong> Guideline: Sugars intake for adults and children. Geneva. — <em>Límite de azúcares añadidos (<25g/día)</em></li>
+                <li><strong>EFSA NDA Panel (2010).</strong> Scientific Opinion on Dietary Reference Values for fats. EFSA Journal, 8(3), 1461. — <em>Ácidos grasos saturados, omega-3, EPA+DHA</em></li>
+            </ul>
+
+            <div style="font-size: 12px; font-weight: 700; color: var(--primary-color); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Nutrición Deportiva</div>
+            <ul style="font-size: 13px; line-height: 1.8; padding-left: 16px; margin-bottom: 20px; color: var(--text-main);">
+                <li><strong>Kerksick, C.M. et al. (2018).</strong> ISSN exercise & sports nutrition review update: research & recommendations. JISSN, 15(1), 38. — <em>Multiplicadores de micronutrientes para deportistas</em></li>
+                <li><strong>Thomas, D.T., Erdman, K.A. & Burke, L.M. (2016).</strong> Position of the Academy of Nutrition and Dietetics, ACSM: Nutrition and Athletic Performance. JAND, 116(3), 501–528. — <em>Requerimientos energéticos y proteicos</em></li>
+                <li><strong>Jäger, R. et al. (2017).</strong> ISSN Position Stand: protein and exercise. JISSN, 14, 20. — <em>Requerimientos de aminoácidos en fuerza vs resistencia</em></li>
+            </ul>
+
+            <div style="font-size: 12px; font-weight: 700; color: var(--primary-color); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Micronutrientes en Deporte</div>
+            <ul style="font-size: 13px; line-height: 1.8; padding-left: 16px; margin-bottom: 20px; color: var(--text-main);">
+                <li><strong>Peeling, P. et al. (2008).</strong> Athletic induced iron deficiency: new insights into the role of inflammation, cytokines and hormones. Eur J Appl Physiol, 103(4), 381–391. — <em>Hierro +30% en resistencia</em></li>
+                <li><strong>Close, G.L. et al. (2013).</strong> Assessment of vitamin D concentration in non-supplemented professional athletes and healthy adults during the winter months in the UK. J Sports Sci, 31(4), 344–353. — <em>Vitamina D +25% en fuerza</em></li>
+                <li><strong>Nielsen, F.H. & Lukaski, H.C. (2006).</strong> Update on the relationship between magnesium and exercise. Magnes Res, 19(3), 180–189. — <em>Magnesio +15–20% en deportistas</em></li>
+                <li><strong>Kilic, M. (2007).</strong> Effect of fatiguing bicycle exercise on thyroid, zinc and testosterone in sedentary males supplemented with oral zinc. Neuro Endocrinol Lett, 28(5), 681–685. — <em>Zinc +20% en fuerza</em></li>
+                <li><strong>Brilla, L.R. & Haley, T.F. (1992).</strong> Effect of magnesium supplementation on strength training in humans. J Am Coll Nutr, 11(3), 326–329. — <em>Magnesio en síntesis proteica</em></li>
+            </ul>
+
+            <div style="font-size: 12px; font-weight: 700; color: var(--primary-color); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Ecuaciones y Metabolismo</div>
+            <ul style="font-size: 13px; line-height: 1.8; padding-left: 16px; margin-bottom: 20px; color: var(--text-main);">
+                <li><strong>Mifflin, M.D. et al. (1990).</strong> A new predictive equation for resting energy expenditure in healthy individuals. Am J Clin Nutr, 51(2), 241–247. — <em>Ecuación Mifflin-St Jeor para BMR</em></li>
+                <li><strong>EFSA NDA Panel (2013).</strong> Scientific Opinion on Dietary Reference Values for energy. EFSA Journal, 11(1), 3005. — <em>Niveles de actividad física (PAL)</em></li>
+            </ul>
+
+            <div style="font-size: 12px; font-weight: 700; color: var(--primary-color); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Bases de Datos de Alimentos</div>
+            <ul style="font-size: 13px; line-height: 1.8; padding-left: 16px; color: var(--text-main);">
+                <li><strong>Open Food Facts (2024).</strong> Base de datos colaborativa de productos alimentarios. openfoodfacts.org — <em>API de búsqueda de productos comerciales</em></li>
+                <li><strong>BEDCA / FEN (2023).</strong> Base de Datos Española de Composición de Alimentos. bedca.net — <em>Datos por 100g: macros, micros, aminoácidos</em></li>
+            </ul>
+        </div>
+    `;
+}
+
 function renderProfile() {
+    const mainContent = document.getElementById('main-content');
+    if (!mainContent) return;
+    renderProfileContent(mainContent);
+}
+
+function renderProfileContent(container) {
+    if (!container) return;
+
     const p = userProfile || { sports: {} };
     
     // Safety check function for template logic
     const safeStr = (val) => val ? val : '';
     const isSelected = (val, match) => val === match ? 'selected' : '';
 
-    mainContent.innerHTML = `
+    container.innerHTML = `
         <h2>${t('your_profile')}</h2>
         <p class="text-muted" style="margin-bottom: 20px;">${t('profile_desc')}</p>
         
@@ -1680,15 +2355,18 @@ function logMeal(mealId) {
     if (currentView === 'home') renderHome();
 }
 
-navButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        renderView(btn.dataset.view);
+document.addEventListener('DOMContentLoaded', () => {
+    const navButtons = document.querySelectorAll('.nav-btn');
+    navButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            renderView(btn.dataset.view);
+        });
     });
-});
 
-// Force profile if no profile exists, otherwise boot to home
-if (userProfile) {
-    renderView('home');
-} else {
-    renderView('profile');
-}
+    // Force profile if no profile exists, otherwise boot to home
+    if (userProfile) {
+        renderView('home');
+    } else {
+        renderView('profile');
+    }
+});
