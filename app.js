@@ -447,6 +447,11 @@ window.showCustomModal = function(title, contentHtml) {
     document.body.insertAdjacentHTML('beforeend', modalHtml);
 };
 
+window.closeModal = function() {
+    const existing = document.getElementById('custom-modal');
+    if (existing) existing.remove();
+};
+
 // Health Tips Extracted from Context PDFs
 const HEALTH_TIPS = [
     { text: "Prioriza siempre el agua como la bebida principal de tu dieta diaria para garantizar una óptima hidratación.", icon: "💧" },
@@ -734,16 +739,35 @@ async function generateAITip() {
     return null;
 }
 
-async function generateAIMeals(groupsList, energy) {
+async function generateAIMeals(groupsList, energy, gaps, customIngredients) {
     const apiKey = localStorage.getItem('aesan_gemini_key');
     if (!apiKey) return null;
 
     const groupsStr = groupsList.join(', ');
-    const prompt = `Actúa como un nutricionista experto. El usuario tiene disponibles los siguientes grupos de alimentos: "${groupsStr}". 
-Invéntate 2 recomendaciones de comida saludables que utilicen PRIORITARIAMENTE estos grupos de alimentos.
-Objetivos diarios del usuario: ${energy.tdee} kcal, PRO: ${energy.proteinGrams}g, CHO: ${energy.carbsGrams}g, GRASAS: ${energy.fatsGrams}g. 
-Las recetas deben ser porciones de 1 comida (aprox. 30% del objetivo diario).
-IMPORTANTE: Especifica pesos reales en gramos para cada ingrediente (ej. "150g pechuga de pollo").
+    
+    // Add custom ingredients instruction if provided
+    let customIngInstruction = "";
+    if (customIngredients && customIngredients.trim() !== "") {
+        customIngInstruction = `
+El usuario ha mencionado que le gustaría inspirarse o incluir estos ingredientes específicos: "${customIngredients}".
+OJO: INTENTA incluir ALGUNOS de ellos en las recetas para personalizarlas a sus gustos/nevera, pero NO es obligatorio usarlos absolutamente todos. Siempre prioriza el balance nutricional y los macros sobre el uso forzado de ingredientes que no combinen.`;
+    }
+
+    const prompt = `Actúa como un nutricionista experto en recomposición corporal deportiva. El usuario tiene disponibles los siguientes grupos base: "${groupsStr}". 
+Invéntate 2 recomendaciones de comida saludables atractivas (1 comida, no el día entero).
+${customIngInstruction}
+
+Contexto METABÓLICO IMPORTANTE:
+El usuario tiene un objetivo diario total de: ${energy.tdee} kcal, PRO: ${energy.proteinGrams}g, CHO: ${energy.carbsGrams}g, GRASAS: ${energy.fatsGrams}g.
+Sin embargo, HOY le FALTAN EXACTAMENTE para cumplir su objetivo:
+- Calorías restantes: ${Math.max(0, gaps.kcal)} kcal
+- Proteínas restantes: ${Math.max(0, gaps.pro)} g
+- Carbohidratos restantes: ${Math.max(0, gaps.cho)} g
+- Grasas restantes: ${Math.max(0, gaps.fat)} g
+
+INSTRUCCIÓN CRÍTICA: Debes diseñar estas 2 recetas específicamente para SALDAR ESTAS CARENCIAS sin pasarte significativamente. Las recetas deben cubrir aproximadamente el ${Math.max(20, Math.min(100, Math.round((gaps.kcal/energy.tdee)*100)))}% de su requerimiento total del día enfocado en los macros que le faltan (ej. si le faltan muchas proteínas pero 0 grasas, haz una comida altísima en proteína y bajísima en grasa). Nunca te pases mucho del objetivo restante.
+
+Especifica pesos reales en gramos para cada ingrediente (ej. "150g pechuga de pollo").
 Responde EXCLUSIVAMENTE con un arreglo (array) en formato JSON válido, sin markdown ni backticks, con esta estructura exacta para cada receta:
 [
   {
@@ -753,7 +777,7 @@ Responde EXCLUSIVAMENTE con un arreglo (array) en formato JSON válido, sin mark
     "calories": 450,
     "macros": { "pro": 30, "cho": 45, "fat": 15 },
     "ingredients": ["150g pollo", "200g brócoli"],
-    "instructions": "Instrucciones breves paso a paso"
+    "instructions": "Instrucciones breves paso a paso orientadas a potenciar la nutrición."
   }
 ]`;
 
@@ -878,7 +902,7 @@ function evaluateDiet(history) {
                 }
             });
         } else if (entry.portions) {
-            // New V3 format logging distinct portions
+            // Legacy V3 format logging grouped daily portions
             Object.keys(entry.portions).forEach(group => {
                 const qty = parseFloat(entry.portions[group]) || 0;
                 if (CORE_GUIDELINES[group]) {
@@ -889,6 +913,17 @@ function evaluateDiet(history) {
                     if (isThisWeek) weekHits[group] += qty;
                 }
             });
+        } else if (entry.portion) {
+            // New V4 format logging timed specific portions
+            const group = entry.portion.group;
+            const qty = entry.portion.qty || 1;
+            if (CORE_GUIDELINES[group]) {
+                if (isToday) {
+                    todayHits[group] += qty;
+                    addMicros(PORTIONS_GUIDE[group]?.micros, qty);
+                }
+                if (isThisWeek) weekHits[group] += qty;
+            }
         }
     });
 
@@ -944,6 +979,7 @@ let userHistory = JSON.parse(localStorage.getItem('aesan_history')) || [];
 let userProfile = JSON.parse(localStorage.getItem('aesan_profile')) || null;
 let currentView = 'home';
 let activeFilters = []; // For filtering suggestions
+let currentRegistroMode = 'timeline'; // State for Registro tab: timeline, portions, products
 
 function renderView(viewName) {
     const mainContent = document.getElementById('main-content');
@@ -957,9 +993,8 @@ function renderView(viewName) {
     // Update bottom nav labels based on language
     const lnProg = document.getElementById('nav-progreso'); if(lnProg) lnProg.innerText = t('prog_tab');
     const lnSug = document.getElementById('nav-sugerencias'); if(lnSug) lnSug.innerText = t('sug_tab');
-    const lnPor = document.getElementById('nav-porciones'); if(lnPor) lnPor.innerText = t('portions_tab');
+    const lnReg = document.getElementById('nav-registro'); if(lnReg) lnReg.innerText = 'Registro';
     const lnProf = document.getElementById('nav-perfil'); if(lnProf) lnProf.innerText = t('prof_tab');
-    const lnProd = document.getElementById('nav-productos'); if(lnProd) lnProd.innerText = t('prod_tab');
 
     // Force user to profile if first time
     const isProfileView = viewName === 'profile' || viewName === 'options';
@@ -982,11 +1017,8 @@ function renderView(viewName) {
         case 'options':
             renderOptions();
             break;
-        case 'portions':
-            renderPortions();
-            break;
-        case 'products':
-            renderProducts();
+        case 'registro':
+            renderRegistro();
             break;
     }
 }
@@ -1002,50 +1034,165 @@ function updateNavButtons(activeView) {
     });
 }
 
-// --- View: Products (OFF Search & Timeline) ---
-let lastSearchResults = [];
+// --- View: Registro (Combined Portions & Products) ---
+window.changeRegistroMode = function(mode) {
+    currentRegistroMode = mode;
+    const body = document.getElementById('registro-body');
+    if (body) {
+        if (mode === 'portions') {
+            renderPortions();
+        } else {
+            renderProducts();
+        }
+    }
+};
 
-function renderProducts() {
+function renderRegistro() {
     const mainContent = document.getElementById('main-content');
     if (!mainContent) return;
-    
-    // --- Today's timeline ---
-    let timelineHtml = '';
+
+    mainContent.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 style="margin: 0;">Registro</h2>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <select onchange="window.changeRegistroMode(this.value)" style="padding: 6px 12px; border-radius: 8px; border: 1px solid var(--primary-color); background: var(--card-bg); color: var(--text-color); font-size: 14px; outline: none; cursor: pointer;">
+                    <option value="timeline" ${currentRegistroMode === 'timeline' ? 'selected' : ''}>Diario</option>
+                    <option value="portions" ${currentRegistroMode === 'portions' ? 'selected' : ''}>Por porciones</option>
+                    <option value="products" ${currentRegistroMode === 'products' ? 'selected' : ''}>Por alimentos</option>
+                </select>
+                <button onclick="window.openUnifiedAddLogModal()" style="width: 36px; height: 36px; border-radius: 50%; background: var(--primary-color); color: white; border: none; font-size: 20px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); padding: 0;">
+                    +
+                </button>
+            </div>
+        </div>
+        <div id="registro-body"></div>
+    `;
+
+    if (currentRegistroMode === 'timeline') {
+        renderTimelineView();
+    } else if (currentRegistroMode === 'portions') {
+        renderPortions();
+    } else {
+        renderProducts();
+    }
+}
+
+window._unifiedLogTime = null;
+
+window.openUnifiedAddLogModal = () => {
+    const defaultTime = new Date().toTimeString().slice(0, 5);
+    window.showCustomModal('Añadir al Diario', `
+        <div style="display: flex; flex-direction: column; gap: 16px; margin-top: 8px;">
+            <div>
+                <label style="font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; display: block;">Hora de consumo</label>
+                <input type="time" id="unified-log-time" value="${defaultTime}" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1); font-size: 16px; background: var(--card-bg); color: var(--text-color); outline: none;">
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <button onclick="window.startLogPortionFlow()" style="padding: 14px; background: var(--card-bg); color: var(--primary-color); border: 2px solid var(--primary-color); border-radius: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer;">
+                    <span style="font-size: 24px;">🍎</span>
+                    <span style="font-size: 14px; font-weight: 600;">Porción</span>
+                </button>
+                <button onclick="window.startLogProductFlow()" style="padding: 14px; background: var(--card-bg); color: var(--primary-color); border: 2px solid var(--primary-color); border-radius: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer;">
+                    <span style="font-size: 24px;">🔍</span>
+                    <span style="font-size: 14px; font-weight: 600;">Alimento</span>
+                </button>
+            </div>
+        </div>
+    `);
+};
+
+window.startLogPortionFlow = () => {
+    window._unifiedLogTime = document.getElementById('unified-log-time').value;
+    closeModal();
+    let gridHtml = '<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 12px;">';
+    Object.keys(PORTIONS_GUIDE).forEach(key => {
+        gridHtml += `<div onclick="window.openPortionSelector('${key}')" style="background: var(--card-bg); border: 1px solid rgba(0,0,0,0.05); border-radius: 12px; padding: 12px 0; text-align: center; font-size: 28px; cursor: pointer;">${PORTIONS_GUIDE[key].icon}</div>`
+    });
+    gridHtml += '</div>';
+    window.showCustomModal(`Elige un grupo (${window._unifiedLogTime})`, gridHtml);
+};
+
+window.startLogProductFlow = () => {
+    window._unifiedLogTime = document.getElementById('unified-log-time').value;
+    closeModal();
+    window.changeRegistroMode('products');
+};
+
+function renderTimelineView() {
+    const container = document.getElementById('registro-body');
+    if (!container) return;
+
     const now = new Date();
-    const todaysProducts = userHistory.filter(entry => {
-        if (!entry.product) return false;
+    const todaysEntries = userHistory.filter(entry => {
+        if (!entry.product && !entry.portion) return false;
         return new Date(entry.timestamp).toDateString() === now.toDateString();
     });
 
-    if (todaysProducts.length > 0) {
-        let totalCal = 0;
-        let tlItems = '';
-        todaysProducts.forEach(entry => {
+    todaysEntries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); // Newest first
+
+    if (todaysEntries.length === 0) {
+        container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 40px 20px;">
+            <div style="font-size: 48px; margin-bottom: 16px;">📝</div>
+            <p>Aún no has registrado nada hoy.</p>
+            <p style="font-size: 14px;">Toca el botón <b>+</b> arriba a la derecha para empezar.</p>
+        </div>`;
+        return;
+    }
+
+    let totalCal = 0;
+    let tlItems = '';
+
+    todaysEntries.forEach(entry => {
+        const timeStr = new Date(entry.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        
+        if (entry.product) {
             const g = entry.product.amount_g || 100;
             const cal = Math.round(entry.product.calories * g / 100);
             totalCal += cal;
-            const timeStr = new Date(entry.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             const displayMeasure = entry.product.measure_text || `${g}g`;
             tlItems += `
-                <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,0.04);">
-                    <div style="font-size: 20px; width: 36px; text-align: center;">${entry.product.image ? '' : '📦'}</div>
+                <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid rgba(0,0,0,0.04);">
+                    <div style="font-size: 24px; min-width: 36px; text-align: center;">${entry.product.image ? '' : '📦'}</div>
                     ${entry.product.image ? `<img src="${entry.product.image}" style="width: 36px; height: 36px; object-fit: cover; border-radius: 6px;">` : ''}
                     <div style="flex: 1; min-width: 0;">
                         <div style="font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${entry.product.name}</div>
-                        <div style="font-size: 11px; color: var(--text-muted);">${displayMeasure} · ${timeStr}</div>
+                        <div style="font-size: 12px; color: var(--text-muted);">${displayMeasure} · ${timeStr}</div>
                     </div>
-                    <div style="font-size: 13px; font-weight: 700; color: var(--primary-color); white-space: nowrap;">${cal} kcal</div>
+                    <div style="font-size: 14px; font-weight: 700; color: var(--primary-color); white-space: nowrap;">${cal} kcal</div>
                 </div>`;
-        });
-        timelineHtml = `
-            <div class="glass-card" style="padding: 16px; margin-bottom: 20px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <h3 style="margin: 0; font-size: 16px;">Diario de Hoy</h3>
-                    <span style="font-size: 14px; font-weight: 700; color: var(--primary-color);">${totalCal} kcal</span>
-                </div>
-                ${tlItems}
-            </div>`;
-    }
+        } else if (entry.portion) {
+            const info = PORTIONS_GUIDE[entry.portion.group];
+            const optionLabel = info.options[entry.portion.optionIndex] ? info.options[entry.portion.optionIndex].name : 'Genérico';
+            tlItems += `
+                <div style="display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid rgba(0,0,0,0.04);">
+                    <div style="font-size: 28px; min-width: 36px; text-align: center;">${info.icon}</div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${t(entry.portion.group)} (${optionLabel})</div>
+                        <div style="font-size: 12px; color: var(--text-muted);">1 Porción · ${timeStr}</div>
+                    </div>
+                </div>`;
+        }
+    });
+
+    container.innerHTML = `
+        <div class="glass-card" style="padding: 16px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <h3 style="margin: 0; font-size: 16px;">Historial del Día</h3>
+                <span style="font-size: 14px; font-weight: 700; color: var(--primary-color);">${totalCal} kcal</span>
+            </div>
+            ${tlItems}
+        </div>
+    `;
+}
+
+
+// --- View: Products (OFF Search) ---
+let lastSearchResults = [];
+
+function renderProducts() {
+    const container = document.getElementById('registro-body') || document.getElementById('main-content');
+    if (!container) return;
 
     // --- Search results list (MacroFactor style grouping) ---
     let searchResultHtml = '';
@@ -1153,7 +1300,7 @@ function renderProducts() {
             </div>` : ''}
     `;
 
-    mainContent.innerHTML = html;
+    container.innerHTML = html;
 
     // Expand Group accordion
     window.expandGroup = (groupIndex) => {
@@ -1320,8 +1467,16 @@ function logProduct(index) {
         measureText = `${quantity}x ${unitName} (${totalGrams}g)`;
     }
     
+    let d = new Date();
+    if (window._unifiedLogTime) {
+        const [hh, mm] = window._unifiedLogTime.split(':');
+        d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+        window._unifiedLogTime = null; // Clear it for subsequent adds
+    }
+    
     const record = {
-        timestamp: new Date().toISOString(),
+        id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+        timestamp: d.toISOString(),
         product: { ...selectedProduct, amount_g: totalGrams, measure_text: measureText }
     };
     
@@ -1414,189 +1569,37 @@ function renderHome() {
             </div>
         </div>
 
-        <!-- 1. Energía y Macronutrientes Básicos -->
+        <!-- 1. Energía (Balance) -->
+        <div class="glass-card" style="margin-bottom: 24px; padding: 16px 12px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Balance Energético 🔥</div>
+            ${(() => {
+                const md = state.todayMacroDetail;
+                const percent = energy.tdee > 0 ? Math.min(100, (md.tdeeActual / energy.tdee) * 100) : 0;
+                let barColor = 'var(--accent-color)';
+                if (percent >= 80) barColor = 'var(--secondary-color)';
+                return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>🔥 Energía (AR)</span><span>${md.tdeeActual.toFixed(1)} / ${energy.tdee} kcal <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+            })()}
+        </div>
+
+        <!-- 2. Proteínas y Aminoácidos -->
         <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
-            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                Energía y Macronutrientes Básicos 🔬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
-            </summary>
-            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+            <summary style="padding: 14px 12px; outline: none; list-style: none;">
+                <div style="font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between;">
+                    Proteínas y Aminoácidos 🥩 <span style="font-size: 12px; color: var(--primary-color);">▼ Expandir</span>
+                </div>
                 ${(() => {
                     const md = state.todayMacroDetail;
-                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type, specificColor) => {
-                        const val = currentVal || 0;
-                        const tVal = targetVal || 0;
-                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
-                        
-                        let barColor = specificColor || 'var(--accent-color)'; 
-                        if (!specificColor) {
-                            if (type === 'max') {
-                                barColor = 'var(--secondary-color)'; 
-                                if (percent >= 80) barColor = '#fbbf24'; 
-                                if (percent >= 100) barColor = 'var(--accent-color)'; 
-                            } else if (type === 'min' || type === 'target') {
-                                barColor = 'var(--accent-color)'; 
-                                if (percent >= 50) barColor = '#fbbf24'; 
-                                if (percent >= 80) barColor = 'var(--secondary-color)';
-                            }
-                        }
-
-                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
-                    };
-                    
-                    return `
-                        ${renderBarEFSA('Energía (AR)', '🔥', md.tdeeActual, energy.tdee, 'kcal', 'target')}
-                        ${renderBarEFSA('Proteínas (PRI)', '🥩', md.proteinActual, energy.proteinGrams, 'g', 'target')}
-                        ${renderBarEFSA('Carbohidratos (RI)', '🍚', md.carbsActual, energy.carbsGrams, 'g', 'target')}
-                        ${renderBarEFSA('Grasas Totales (RI)', '🥑', md.fatsActual, energy.fatsGrams, 'g', 'target')}
-                    `;
+                    const percent = energy.proteinGrams > 0 ? Math.min(100, (md.proteinActual / energy.proteinGrams) * 100) : 0;
+                    let barColor = 'var(--accent-color)';
+                    if (percent >= 50) barColor = '#fbbf24';
+                    if (percent >= 80) barColor = 'var(--secondary-color)';
+                    return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>🥩 Proteínas Totales (PRI)</span><span>${md.proteinActual.toFixed(1)} / ${energy.proteinGrams} g <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
                 })()}
-            </div>
-        </details>
-
-        <!-- 2. Carbohidratos y Fibra Dietética -->
-        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
-            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                Carbohidratos y Fibra Dietética 🌾 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
             </summary>
-            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
-                ${(() => {
-                    const md = state.todayMacroDetail;
-                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type) => {
-                        const val = currentVal || 0;
-                        const tVal = targetVal || 0;
-                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
-                        let barColor = type === 'max' ? 'var(--secondary-color)' : 'var(--accent-color)';
-                        if (type === 'max') { if (percent >= 80) barColor = '#fbbf24'; if (percent >= 100) barColor = 'var(--accent-color)'; }
-                        else { if (percent >= 50) barColor = '#fbbf24'; if (percent >= 80) barColor = 'var(--secondary-color)'; }
-                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
-                    };
-                    const fiberGoal = 25; // EFSA AI
-                    const sugarMax = 25; // WHO/EFSA Upper Limit indicator
-                    return `
-                        ${renderBarEFSA('Fibra Dietética (AI)', '🌾', md.fiber, fiberGoal, 'g', 'min')}
-                        ${renderBarEFSA('Azúcares Totales (Límite)', '🍬', md.sugars, sugarMax, 'g', 'max')}
-                    `;
-                })()}
-            </div>
-        </details>
-
-        <!-- 3. Grasas y Perfil Lipídico -->
-        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
-            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                Grasas y Perfil Lipídico 🥑 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
-            </summary>
-            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
-                ${(() => {
-                    const md = state.todayMacroDetail;
-                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type, essential) => {
-                        const val = currentVal || 0;
-                        const tVal = targetVal || 0;
-                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
-                        let barColor = type === 'max' ? 'var(--secondary-color)' : 'var(--accent-color)';
-                        if (type === 'max') { if (percent >= 80) barColor = '#fbbf24'; if (percent >= 100) barColor = 'var(--accent-color)'; }
-                        else { if (percent >= 50) barColor = '#fbbf24'; if (percent >= 80) barColor = 'var(--secondary-color)'; }
-                        if (essential && percent >= 80) barColor = 'var(--primary-color)';
-                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
-                    };
-                    
-                    const tdee = energy.tdee || 2000;
-                    const satMax = Math.round((tdee * 0.10) / 9); 
-                    const monoTarget = Math.round((tdee * 0.15) / 9); 
-                    const polyTarget = Math.round((tdee * 0.07) / 9); 
-                    
-                    return `
-                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Desglose Lipídico</div>
-                        ${renderBarEFSA('Saturadas (Límite <10%)', '🧈', md.sat, satMax, 'g', 'max', false)}
-                        ${renderBarEFSA('Monoinsaturadas (Target)', '🫒', md.mono, monoTarget, 'g', 'min', false)}
-                        ${renderBarEFSA('Poliinsaturadas (Target)', '🥜', md.poly, polyTarget, 'g', 'min', false)}
-                        
-                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-top: 12px; margin-bottom: -4px;">Ácidos Grasos Esenciales</div>
-                        ${renderBarEFSA('Omega-6 LA (AI)', '⚡', md.omega6, 10, 'g', 'min', true)}
-                        ${renderBarEFSA('Omega-3 ALA (AI)', '💧', md.omega3, 2, 'g', 'min', true)}
-                        ${renderBarEFSA('EPA + DHA (AI/RTI)', '🐠', md.epa + md.dha, 0.25, 'g', 'min', true)}
-                    `;
-                })()}
-            </div>
-        </details>
-
-        <!-- 4. Vitaminas -->
-        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
-            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                Requerimientos de Vitaminas ☀️ <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
-            </summary>
-            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
-                ${(() => {
-                    const micros = getUserMicronutrientNeeds(userProfile);
-                    const current = state.todayMicros;
-                    const renderBarMicro = (label, icon, currentVal, targetVal, unit) => {
-                        const val = currentVal || 0;
-                        const tVal = targetVal || 1; // Fallback to 1 to prevent div by zero
-                        const percent = Math.min(100, (val / tVal) * 100);
-                        let barColor = 'var(--accent-color)'; 
-                        if (percent >= 50) barColor = '#fbbf24'; 
-                        if (percent >= 80) barColor = 'var(--secondary-color)';
-                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${Math.round(val)} / ${Math.round(tVal)} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
-                    };
-                    return `
-                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Liposolubles</div>
-                        ${renderBarMicro('Vitamina A (PRI)', '👁️', current.vitA, micros.vitA.pri, 'µg')}
-                        ${renderBarMicro('Vitamina D (AI)', '☀️', current.vitD, micros.vitD.pri, 'µg')}
-                        ${renderBarMicro('Vitamina E (AI)', '🥑', current.vitE, micros.vitE.pri, 'mg')}
-                        ${renderBarMicro('Vitamina K (AI)', '🥬', current.vitK, micros.vitK.pri, 'µg')}
-                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-top: 12px; margin-bottom: -4px;">Hidrosolubles</div>
-                        ${renderBarMicro('Vitamina C (PRI)', '🍊', current.vitaminC, micros.vitaminC.pri, 'mg')}
-                        ${renderBarMicro('B1 Tiamina (PRI)', '🌾', current.vitB1, micros.vitB1.pri, 'mg')}
-                        ${renderBarMicro('B2 Riboflavina (PRI)', '🥛', current.vitB2, micros.vitB2.pri, 'mg')}
-                        ${renderBarMicro('B3 Niacina (PRI)', '🥜', current.vitB3, micros.vitB3.pri, 'mg')}
-                        ${renderBarMicro('B5 Pantoténico (AI)', '🥚', current.vitB5, micros.vitB5.pri, 'mg')}
-                        ${renderBarMicro('B6 Piridoxina (PRI)', '🥩', current.vitB6, micros.vitB6.pri, 'mg')}
-                        ${renderBarMicro('B9 Ácido Fólico (PRI)', '🥦', current.vitB9, micros.vitB9.pri, 'µg')}
-                        ${renderBarMicro('B12 Cobalamina (AI)', '🐟', current.vitB12, micros.vitB12.pri, 'µg')}
-                    `;
-                })()}
-            </div>
-        </details>
-
-        <!-- 5. Minerales -->
-        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
-            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                Elementos y Minerales Traza 🪨 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
-            </summary>
-            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
-                ${(() => {
-                    const micros = getUserMicronutrientNeeds(userProfile);
-                    const current = state.todayMicros;
-                    const renderBarMicro = (label, icon, currentVal, targetVal, unit) => {
-                        const val = currentVal || 0;
-                        const tVal = targetVal || 1; // Fallback
-                        const percent = Math.min(100, (val / tVal) * 100);
-                        let barColor = 'var(--accent-color)'; 
-                        if (percent >= 50) barColor = '#fbbf24'; 
-                        if (percent >= 80) barColor = 'var(--secondary-color)';
-                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${Math.round(val)} / ${Math.round(tVal)} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
-                    };
-                    return `
-                        ${renderBarMicro('Calcio (PRI)', '🦴', current.calcium, micros.calcium.pri, 'mg')}
-                        ${renderBarMicro('Hierro (PRI)', '🩸', current.iron, micros.iron.pri, 'mg')}
-                        ${renderBarMicro('Magnesio (AI)', '⚡', current.magnesium, micros.magnesium.pri, 'mg')}
-                        ${renderBarMicro('Zinc (PRI)', '🛡️', current.zinc, micros.zinc.pri, 'mg')}
-                        ${renderBarMicro('Potasio (AI)', '🍌', current.potassium, micros.potassium.pri, 'mg')}
-                        ${renderBarMicro('Selenio (AI)', '🌱', current.selenium, micros.selenium.pri, 'µg')}
-                        ${renderBarMicro('Yodo (AI)', '🌊', current.iodine, micros.iodine.pri, 'µg')}
-                    `;
-                })()}
-            </div>
-        </details>
-
-        <!-- 6. Aminoácidos Esenciales -->
-        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
-            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
-                Aminoácidos Esenciales 🧬 <span style="font-size: 12px; color: var(--primary-color);">Tocar para expandir</span>
-            </summary>
-            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 8px; padding-top: 16px;">
                 ${(() => {
                     const am = state.todayAminos;
-                    const w = (userProfile && userProfile.weight) ? parseFloat(userProfile.weight) : 70; // Safe fallback
+                    const w = (userProfile && userProfile.weight) ? parseFloat(userProfile.weight) : 70;
                     const sp = (userProfile && userProfile.sports) || {};
                     const sStr = parseInt(sp.strength) || 0;
                     const sEnd = parseInt(sp.endurance) || 0;
@@ -1633,7 +1636,8 @@ function renderHome() {
                         return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${label}</span><span>${Math.round(val)} / ${tVal} mg <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
                     };
                     return `
-                        <p style="font-size:11px;color:var(--text-muted);margin-top:-4px;margin-bottom:8px;">Requisito EFSA/ISSN ajustado a peso: ${w}kg ${sportLabel}</p>
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Aminoácidos Esenciales 🧬</div>
+                        <p style="font-size:11px;color:var(--text-muted);margin-top:-2px;margin-bottom:8px;">Requisito ajustado a peso: ${w}kg ${sportLabel}</p>
                         ${renderBarA('Leucina', am.leucine, eaaPRI.leucine)}
                         ${renderBarA('Isoleucina', am.isoleucine, eaaPRI.isoleucine)}
                         ${renderBarA('Valina', am.valine, eaaPRI.valine)}
@@ -1644,6 +1648,162 @@ function renderHome() {
                         ${renderBarA('Treonina', am.threonine, eaaPRI.threonine)}
                         ${renderBarA('Triptófano', am.tryptophan, eaaPRI.tryptophan)}
                         ${renderBarA('Histidina', am.histidine, eaaPRI.histidine)}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 3. Carbohidratos y Fibra/Azúcar -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; outline: none; list-style: none;">
+                <div style="font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between;">
+                    Carbohidratos 🍚 <span style="font-size: 12px; color: var(--primary-color);">▼ Expandir</span>
+                </div>
+                ${(() => {
+                    const md = state.todayMacroDetail;
+                    const percent = energy.carbsGrams > 0 ? Math.min(100, (md.carbsActual / energy.carbsGrams) * 100) : 0;
+                    let barColor = 'var(--accent-color)';
+                    if (percent >= 50) barColor = '#fbbf24';
+                    if (percent >= 80) barColor = 'var(--secondary-color)';
+                    return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>🍚 Carbohidratos (RI)</span><span>${md.carbsActual.toFixed(1)} / ${energy.carbsGrams} g <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                })()}
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 8px; padding-top: 16px;">
+                ${(() => {
+                    const md = state.todayMacroDetail;
+                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 0;
+                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
+                        let barColor = type === 'max' ? 'var(--secondary-color)' : 'var(--accent-color)';
+                        if (type === 'max') { if (percent >= 80) barColor = '#fbbf24'; if (percent >= 100) barColor = 'var(--accent-color)'; }
+                        else { if (percent >= 50) barColor = '#fbbf24'; if (percent >= 80) barColor = 'var(--secondary-color)'; }
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    const fiberGoal = 25; 
+                    const sugarMax = 25; 
+                    return `
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Fibra y Azúcares</div>
+                        ${renderBarEFSA('Fibra Dietética (AI)', '🌾', md.fiber, fiberGoal, 'g', 'min')}
+                        ${renderBarEFSA('Azúcares Totales (Límite)', '🍬', md.sugars, sugarMax, 'g', 'max')}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 4. Grasas y Perfil Lipídico -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; outline: none; list-style: none;">
+                <div style="font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between;">
+                    Grasas y Perfil Lipídico 🥑 <span style="font-size: 12px; color: var(--primary-color);">▼ Expandir</span>
+                </div>
+                ${(() => {
+                    const md = state.todayMacroDetail;
+                    const percent = energy.fatsGrams > 0 ? Math.min(100, (md.fatsActual / energy.fatsGrams) * 100) : 0;
+                    let barColor = 'var(--accent-color)';
+                    if (percent >= 50) barColor = '#fbbf24';
+                    if (percent >= 80) barColor = 'var(--secondary-color)';
+                    return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>🥑 Grasas Totales (RI)</span><span>${md.fatsActual.toFixed(1)} / ${energy.fatsGrams} g <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                })()}
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 8px; padding-top: 16px;">
+                ${(() => {
+                    const md = state.todayMacroDetail;
+                    const renderBarEFSA = (label, icon, currentVal, targetVal, unit, type, essential) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 0;
+                        const percent = tVal > 0 ? Math.min(100, (val / tVal) * 100) : 0;
+                        let barColor = type === 'max' ? 'var(--secondary-color)' : 'var(--accent-color)';
+                        if (type === 'max') { if (percent >= 80) barColor = '#fbbf24'; if (percent >= 100) barColor = 'var(--accent-color)'; }
+                        else { if (percent >= 50) barColor = '#fbbf24'; if (percent >= 80) barColor = 'var(--secondary-color)'; }
+                        if (essential && percent >= 80) barColor = 'var(--primary-color)';
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${val.toFixed(1)} / ${tVal} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    
+                    const tdee = energy.tdee || 2000;
+                    const satMax = Math.round((tdee * 0.10) / 9); 
+                    const monoTarget = Math.round((tdee * 0.15) / 9); 
+                    const polyTarget = Math.round((tdee * 0.07) / 9); 
+                    
+                    return `
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Desglose Lipídico</div>
+                        ${renderBarEFSA('Saturadas (Límite <10%)', '🧈', md.sat, satMax, 'g', 'max', false)}
+                        ${renderBarEFSA('Monoinsaturadas (Target)', '🫒', md.mono, monoTarget, 'g', 'min', false)}
+                        ${renderBarEFSA('Poliinsaturadas (Target)', '🥜', md.poly, polyTarget, 'g', 'min', false)}
+                        
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-top: 12px; margin-bottom: -4px;">Ácidos Grasos Esenciales</div>
+                        ${renderBarEFSA('Omega-6 LA (AI)', '⚡', md.omega6, 10, 'g', 'min', true)}
+                        ${renderBarEFSA('Omega-3 ALA (AI)', '💧', md.omega3, 2, 'g', 'min', true)}
+                        ${renderBarEFSA('EPA + DHA (AI/RTI)', '🐠', md.epa + md.dha, 0.25, 'g', 'min', true)}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 5. Vitaminas -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                Requerimientos de Vitaminas ☀️ <span style="font-size: 12px; color: var(--primary-color);">▼ Expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+                ${(() => {
+                    const micros = getUserMicronutrientNeeds(userProfile);
+                    const current = state.todayMicros;
+                    const renderBarMicro = (label, icon, currentVal, targetVal, unit) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 1; // Fallback to 1 to prevent div by zero
+                        const percent = Math.min(100, (val / tVal) * 100);
+                        let barColor = 'var(--accent-color)'; 
+                        if (percent >= 50) barColor = '#fbbf24'; 
+                        if (percent >= 80) barColor = 'var(--secondary-color)';
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${Math.round(val)} / ${Math.round(tVal)} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    return `
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-bottom: -4px;">Liposolubles</div>
+                        ${renderBarMicro('Vitamina A (PRI)', '👁️', current.vitA, micros.vitA.pri, 'µg')}
+                        ${renderBarMicro('Vitamina D (AI)', '☀️', current.vitD, micros.vitD.pri, 'µg')}
+                        ${renderBarMicro('Vitamina E (AI)', '🥑', current.vitE, micros.vitE.pri, 'mg')}
+                        ${renderBarMicro('Vitamina K (AI)', '🥬', current.vitK, micros.vitK.pri, 'µg')}
+                        <div style="font-size: 12px; font-weight: bold; color: var(--primary-color); margin-top: 12px; margin-bottom: -4px;">Hidrosolubles</div>
+                        ${renderBarMicro('Vitamina C (PRI)', '🍊', current.vitaminC, micros.vitaminC.pri, 'mg')}
+                        ${renderBarMicro('B1 Tiamina (PRI)', '🌾', current.vitB1, micros.vitB1.pri, 'mg')}
+                        ${renderBarMicro('B2 Riboflavina (PRI)', '🥛', current.vitB2, micros.vitB2.pri, 'mg')}
+                        ${renderBarMicro('B3 Niacina (PRI)', '🥜', current.vitB3, micros.vitB3.pri, 'mg')}
+                        ${renderBarMicro('B5 Pantoténico (AI)', '🥚', current.vitB5, micros.vitB5.pri, 'mg')}
+                        ${renderBarMicro('B6 Piridoxina (PRI)', '🥩', current.vitB6, micros.vitB6.pri, 'mg')}
+                        ${renderBarMicro('B9 Ácido Fólico (PRI)', '🥦', current.vitB9, micros.vitB9.pri, 'µg')}
+                        ${renderBarMicro('B12 Cobalamina (AI)', '🐟', current.vitB12, micros.vitB12.pri, 'µg')}
+                    `;
+                })()}
+            </div>
+        </details>
+
+        <!-- 6. Minerales -->
+        <details class="glass-card" style="margin-bottom: 24px; cursor: pointer;">
+            <summary style="padding: 14px 12px; font-weight: 600; outline: none; list-style: none; display: flex; justify-content: space-between; align-items: center;">
+                Elementos y Minerales Traza 🪨 <span style="font-size: 12px; color: var(--primary-color);">▼ Expandir</span>
+            </summary>
+            <div style="display: flex; flex-direction: column; gap: 12px; padding: 0 12px 14px 12px; border-top: 1px solid rgba(0,0,0,0.05); margin-top: 4px; padding-top: 16px;">
+                ${(() => {
+                    const micros = getUserMicronutrientNeeds(userProfile);
+                    const current = state.todayMicros;
+                    const renderBarMicro = (label, icon, currentVal, targetVal, unit) => {
+                        const val = currentVal || 0;
+                        const tVal = targetVal || 1; // Fallback
+                        const percent = Math.min(100, (val / tVal) * 100);
+                        let barColor = 'var(--accent-color)'; 
+                        if (percent >= 50) barColor = '#fbbf24'; 
+                        if (percent >= 80) barColor = 'var(--secondary-color)';
+                        return `<div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;font-weight:500;"><span>${icon} ${label}</span><span>${Math.round(val)} / ${Math.round(tVal)} ${unit} <span style="color:${barColor};font-weight:bold;">(${Math.round(percent)}%)</span></span></div><div style="width:100%;height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden;"><div style="width:${percent}%;height:100%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div></div></div>`;
+                    };
+                    return `
+                        ${renderBarMicro('Calcio (PRI)', '🦴', current.calcium, micros.calcium.pri, 'mg')}
+                        ${renderBarMicro('Hierro (PRI)', '🩸', current.iron, micros.iron.pri, 'mg')}
+                        ${renderBarMicro('Magnesio (AI)', '⚡', current.magnesium, micros.magnesium.pri, 'mg')}
+                        ${renderBarMicro('Zinc (PRI)', '🛡️', current.zinc, micros.zinc.pri, 'mg')}
+                        ${renderBarMicro('Potasio (AI)', '🍌', current.potassium, micros.potassium.pri, 'mg')}
+                        ${renderBarMicro('Selenio (AI)', '🌱', current.selenium, micros.selenium.pri, 'µg')}
+                        ${renderBarMicro('Yodo (AI)', '🌊', current.iodine, micros.iodine.pri, 'µg')}
                     `;
                 })()}
             </div>
@@ -1825,6 +1985,15 @@ function renderSuggestions() {
             ${chipsHtml}
         </div>
 
+        <div style="margin-bottom: 20px;">
+            <input type="text" id="ai-custom-ingredients" 
+                   placeholder="Ej: tomate, espinacas, pechuga de pollo..." 
+                   style="width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--glass-border); background: var(--card-bg); color: var(--text-main); font-size: 14px; box-sizing: border-box; outline: none;"
+                   ${localStorage.getItem('temp_custom_ing') ? `value="${localStorage.getItem('temp_custom_ing')}"` : ''} 
+                   oninput="localStorage.setItem('temp_custom_ing', this.value)">
+            <small style="color: var(--text-muted); font-size: 11px; margin-top: 6px; display: block; padding-left: 4px;">Ingredientes extra para inspirar a la IA (Opcional)</small>
+        </div>
+
         <div style="display: flex; gap: 12px; margin-bottom: 24px;">
             <button class="btn-primary" onclick="window.renderSuggestions()" style="flex: 1; font-size: 14px; padding: 12px;">${t('search_btn')}</button>
             <button class="btn-primary" onclick="window.handleAISearch()" style="flex: 1; font-size: 14px; padding: 12px; background: var(--primary-color);">${t('search_ai_btn')}</button>
@@ -1869,20 +2038,32 @@ function renderSuggestions() {
             return;
         }
 
+        const customIngInput = document.getElementById('ai-custom-ingredients');
+        const customIngredients = customIngInput ? customIngInput.value : '';
+
         const mainContainer = document.getElementById('suggestions-container');
         if (mainContainer) {
             mainContainer.innerHTML = `
                 <div style="text-align:center; padding: 40px; background: var(--card-bg); border-radius: 20px; border: 1px solid var(--glass-border);">
                     <div style="font-size: 50px; animation: pulse 1s infinite alternate;">🧑‍🍳</div>
                     <h3 style="color: var(--primary-color); margin-top: 16px;">${t('ai_cooking')}</h3>
-                    <p class="text-muted" style="font-size: 14px;">${t('ai_generating')} ${activeFilters.map(f => t(PORTIONS_GUIDE[f].key)).join(', ')}</p>
+                    <p class="text-muted" style="font-size: 14px;">Generando recetas personalizadas...</p>
                 </div>
                 <style>@keyframes pulse { 0% { opacity: 0.6; transform: scale(0.95); } 100% { opacity: 1; transform: scale(1.05); } }</style>
             `;
         }
 
         const e = calculateEnergyNeeds(userProfile) || { tdee: 2000, proteinGrams: 100, carbsGrams: 200, fatsGrams: 60 };
-        const aiMeals = await generateAIMeals(activeFilters.map(f => t(PORTIONS_GUIDE[f].key)), e);
+        const dietState = evaluateDiet(userHistory);
+        const gaps = {
+            kcal: Math.round(e.tdee - dietState.todayMacroDetail.tdeeActual),
+            pro: Math.round(e.proteinGrams - dietState.todayMacroDetail.proteinActual),
+            cho: Math.round(e.carbsGrams - dietState.todayMacroDetail.carbsActual),
+            fat: Math.round(e.fatsGrams - dietState.todayMacroDetail.fatsActual)
+        };
+        
+        const aiMeals = await generateAIMeals(activeFilters.map(f => t(PORTIONS_GUIDE[f].key)), e, gaps, customIngredients);
+
         
         if (aiMeals && aiMeals.length > 0) {
             let aiHtml = '';
@@ -1892,42 +2073,50 @@ function renderSuggestions() {
                 const pBreakdown = meal.portionBreakdown || {};
 
                 aiHtml += `
-                    <div class="glass-card" style="margin-bottom: 16px; padding: 16px; border-top: 4px solid var(--primary-color);">
-                        <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 12px;">
-                            <div style="font-size: 40px; background: rgba(255,255,255,0.5); border-radius: 12px; padding: 10px;">✨</div>
-                            <div>
-                                <h4 style="margin: 0 0 4px 0; font-size: 16px;">${meal.name}</h4>
-                                <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px;">
-                                    ${(meal.groups || []).map(g => `<span class="badge badge-${g}" style="font-size: 10px;">${g}</span>`).join('')}
-                                </div>
-                                <div style="display: flex; gap: 8px; font-size: 12px; color: var(--text-muted);">
-                                    <span><strong>${meal.calories || 0}</strong> kcal</span>
-                                    <span>•</span>
-                                    <span>PRO: ${meal.macros?.pro || 0}g</span>
-                                    <span>CHO: ${meal.macros?.cho || 0}g</span>
-                                    <span>AAGG: ${meal.macros?.fat || 0}g</span>
+                    <details class="glass-card" style="margin-bottom: 16px; border-top: 4px solid var(--primary-color);">
+                        <summary style="padding: 16px; cursor: pointer; list-style: none; outline: none; position: relative;">
+                            <div style="display: flex; align-items: center; /*gap: 16px;*/">
+                                <div style="font-size: 34px; background: rgba(255,255,255,0.5); border-radius: 12px; padding: 8px; margin-right: 14px;">✨</div>
+                                <div style="flex: 1;">
+                                    <h4 style="margin: 0 0 4px 0; font-size: 16px; display: flex; align-items: center; justify-content: space-between;">
+                                        ${meal.name}
+                                        <span style="font-size: 12px; opacity: 0.5;">▼</span>
+                                    </h4>
+                                    <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px;">
+                                        ${(meal.groups || []).map(g => `<span class="badge badge-${g}" style="font-size: 10px;">${g}</span>`).join('')}
+                                    </div>
+                                    <div style="display: flex; gap: 8px; font-size: 12px; color: var(--text-muted);">
+                                        <span><strong>${meal.calories || 0}</strong> kcal</span>
+                                        <span>•</span>
+                                        <span>PRO: ${meal.macros?.pro || 0}g</span>
+                                        <span>CHO: ${meal.macros?.cho || 0}g</span>
+                                        <span>AAGG: ${meal.macros?.fat || 0}g</span>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.3); border-radius: 8px; padding: 12px; font-size: 13px;">
-                            <strong style="color: var(--primary-color);">${t('ingredients_label')}</strong>
-                            <p style="margin: 4px 0 12px 0; color: var(--text-main); line-height: 1.4;">${ingString}</p>
-                            <strong style="color: var(--primary-color);">${t('instructions_label')}</strong>
-                            <p style="margin: 4px 0 0 0; color: var(--text-main); line-height: 1.4;">${instString}</p>
-                            
-                            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,0.05); display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
-                                <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; width: 100%; margin-bottom: 2px;">Porciones estimadas:</span>
-                                ${Object.entries(pBreakdown).map(([g, v]) => `
-                                    <span style="background: rgba(var(--primary-rgb), 0.1); color: var(--primary-color); padding: 2px 8px; border-radius: 12px; font-size: 12px; display: flex; align-items: center; gap: 4px;">
-                                        ${PORTIONS_GUIDE[g] ? PORTIONS_GUIDE[g].icon : ''} <b>${v}</b> ${t(PORTIONS_GUIDE[g]?.key || g)}
-                                    </span>
-                                `).join('')}
+                        </summary>
+                        
+                        <div style="padding: 0 16px 16px 16px;">
+                            <div style="background: rgba(255,255,255,0.3); border-radius: 8px; padding: 12px; font-size: 13px;">
+                                <strong style="color: var(--primary-color);">${t('ingredients_label')}</strong>
+                                <p style="margin: 4px 0 12px 0; color: var(--text-main); line-height: 1.4;">${ingString}</p>
+                                <strong style="color: var(--primary-color);">${t('instructions_label')}</strong>
+                                <p style="margin: 4px 0 0 0; color: var(--text-main); line-height: 1.4;">${instString}</p>
+                                
+                                <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,0.05); display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                                    <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; width: 100%; margin-bottom: 2px;">Porciones estimadas:</span>
+                                    ${Object.entries(pBreakdown).map(([g, v]) => `
+                                        <span style="background: rgba(var(--primary-rgb), 0.1); color: var(--primary-color); padding: 2px 8px; border-radius: 12px; font-size: 12px; display: flex; align-items: center; gap: 4px;">
+                                            ${PORTIONS_GUIDE[g] ? PORTIONS_GUIDE[g].icon : ''} <b>${v}</b> ${t(PORTIONS_GUIDE[g]?.key || g)}
+                                        </span>
+                                    `).join('')}
+                                </div>
+                                <button class="btn-primary" onclick='window.registerMealPortions(${JSON.stringify(pBreakdown)})' style="width: 100%; margin-top: 12px; padding: 8px; font-size: 13px; background: var(--secondary-color);">
+                                    ✅ Añadir porciones a hoy
+                                </button>
                             </div>
-                            <button class="btn-primary" onclick='window.registerMealPortions(${JSON.stringify(pBreakdown)})' style="width: 100%; margin-top: 12px; padding: 8px; font-size: 13px; background: var(--secondary-color);">
-                                ✅ Añadir porciones a hoy
-                            </button>
                         </div>
-                    </div>
+                    </details>
                 `;
             });
             if (mainContainer) mainContainer.innerHTML = aiHtml;
@@ -1938,33 +2127,15 @@ function renderSuggestions() {
 }
 
 function renderPortions() {
-    const mainContent = document.getElementById('main-content');
-    if (!mainContent) return;
+    const container = document.getElementById('registro-body') || document.getElementById('main-content');
+    if (!container) return;
 
-    // Load today's accumulated portions from localStorage
-    const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    let todayPortions = JSON.parse(localStorage.getItem('aesan_today_portions') || '{}');
-    if (todayPortions._date !== todayKey) {
-        todayPortions = { _date: todayKey }; // Reset for new day
-    }
-
-    function saveTodayPortions() {
-        localStorage.setItem('aesan_today_portions', JSON.stringify(todayPortions));
-        // Also sync to history for the progress grid
-        const todayEntry = userHistory.find(e => e.timestamp && e.timestamp.startsWith(todayKey));
-        const portionsCopy = { ...todayPortions };
-        delete portionsCopy._date;
-        if (todayEntry) {
-            todayEntry.portions = portionsCopy;
-        } else {
-            userHistory.push({ timestamp: new Date().toISOString(), portions: portionsCopy });
-        }
-        localStorage.setItem('aesan_history', JSON.stringify(userHistory));
-    }
+    // Evaluate diet dynamically for single source of truth
+    const state = evaluateDiet(userHistory);
 
     let cardsHtml = '';
     Object.entries(PORTIONS_GUIDE).forEach(([key, info]) => {
-        const currentVal = todayPortions[key] || 0;
+        const currentVal = state.todayHits[key] || 0;
         cardsHtml += `
             <div class="glass-card" style="margin-bottom: 12px; display: flex; align-items: center; gap: 14px; padding: 14px; position: relative; flex-wrap: wrap;">
                 <div style="font-size: 36px; min-width: 50px; text-align: center;">
@@ -1991,8 +2162,7 @@ function renderPortions() {
         `;
     });
 
-    mainContent.innerHTML = `
-        <h2>${t('portions_tab')}</h2>
+    container.innerHTML = `
         <p class="text-muted" style="margin-bottom: 16px;">${t('guide_desc')}</p>
         ${cardsHtml}
     `;
@@ -2001,21 +2171,109 @@ function renderPortions() {
     document.querySelectorAll('.step-plus').forEach(btn => {
         btn.addEventListener('click', () => {
             const g = btn.dataset.group;
-            todayPortions[g] = (todayPortions[g] || 0) + 1;
-            document.getElementById(`val-${g}`).innerText = todayPortions[g];
-            saveTodayPortions();
+            window.openPortionSelector(g);
         });
     });
     document.querySelectorAll('.step-minus').forEach(btn => {
         btn.addEventListener('click', () => {
             const g = btn.dataset.group;
-            if ((todayPortions[g] || 0) > 0) {
-                todayPortions[g]--;
-                document.getElementById(`val-${g}`).innerText = todayPortions[g];
-                saveTodayPortions();
+            const now = new Date();
+            
+            // 1. Try to knock off a V4 specific portion entry today for this group
+            const todayEntries = userHistory.filter(entry => 
+                new Date(entry.timestamp).toDateString() === now.toDateString() &&
+                entry.portion && entry.portion.group === g
+            );
+            
+            if (todayEntries.length > 0) {
+                const lastEntry = todayEntries[todayEntries.length - 1]; // Removes most recent
+                userHistory = userHistory.filter(entry => entry.id !== lastEntry.id);
+                localStorage.setItem('aesan_history', JSON.stringify(userHistory));
+                renderRegistro();
+                return;
+            }
+            
+            // 2. Fallback: try to knock off a legacy V3 grouped portion
+            const todayLegacyEntry = userHistory.find(entry => {
+                return new Date(entry.timestamp).toDateString() === now.toDateString() &&
+                       entry.portions && entry.portions[g] > 0;
+            });
+            
+            if (todayLegacyEntry) {
+                todayLegacyEntry.portions[g]--;
+                if (todayLegacyEntry.portions[g] <= 0) {
+                    delete todayLegacyEntry.portions[g];
+                }
+                localStorage.setItem('aesan_history', JSON.stringify(userHistory));
+                renderRegistro();
             }
         });
     });
+
+    window.openPortionSelector = (groupKey) => {
+        const info = PORTIONS_GUIDE[groupKey];
+        if (!info || !info.details) return;
+
+        // Ensure array of strings from details
+        let lines = info.details.split('<br>');
+        // Filter out tips that start with 💡
+        lines = lines.filter(line => !line.trim().startsWith('💡'));
+
+        let buttonsHtml = '';
+        lines.forEach((line, index) => {
+            buttonsHtml += `
+                <button onclick="window.addSpecificPortion('${groupKey}', ${index})" style="width: 100%; text-align: left; padding: 12px; margin-bottom: 8px; border-radius: 12px; border: 1px solid var(--glass-border); background: rgba(99,102,241,0.05); color: var(--text-main); font-size: 14px; cursor: pointer; transition: background 0.2s;">
+                    ${line}
+                </button>
+            `;
+        });
+
+        // Add a generic button just in case
+        buttonsHtml += `
+            <button onclick="window.addSpecificPortion('${groupKey}', -1)" style="width: 100%; text-align: center; padding: 12px; margin-top: 8px; border-radius: 12px; border: 1px dashed var(--primary-color); background: transparent; color: var(--primary-color); font-size: 14px; font-weight: 600; cursor: pointer;">
+                Añadir porción genérica
+            </button>
+        `;
+
+        window.showCustomModal(`¿Qué tipo de ${t(info.key).toLowerCase()}?`, `
+            <div style="margin-top: 10px;">
+                ${buttonsHtml}
+            </div>
+        `);
+    };
+
+    window.addSpecificPortion = (groupKey, optionIndex, timestampStr = null) => {
+        closeModal();
+        
+        let d = new Date();
+        if (window._unifiedLogTime) {
+            const [hh, mm] = window._unifiedLogTime.split(':');
+            d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+            window._unifiedLogTime = null; // Clear it to prevent bleed
+        } else if (timestampStr) {
+            d = new Date(timestampStr);
+        }
+        
+        const ts = d.toISOString();
+        const id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+        
+        userHistory.push({
+            id: id,
+            timestamp: ts,
+            portion: {
+                group: groupKey,
+                optionIndex: optionIndex,
+                qty: 1
+            }
+        });
+        
+        localStorage.setItem('aesan_history', JSON.stringify(userHistory));
+        renderRegistro();
+
+        if (window.showToast) {
+            window.showToast('✅ Porción añadida', 2000);
+        }
+    };
 }
 
 window.registerMealPortions = (portionBreakdown) => {
@@ -2057,6 +2315,7 @@ function renderOptions() {
 
     const profileActive = activeOptionTab === 'profile';
     const biblioActive = activeOptionTab === 'bibliography';
+    const disclaimerActive = activeOptionTab === 'disclaimer';
 
     mainContent.innerHTML = `
         <h2>⚙️ Opciones</h2>
@@ -2066,6 +2325,9 @@ function renderOptions() {
             </button>
             <button onclick="window.switchOptionTab('bibliography')" style="flex: 1; padding: 10px; border-radius: 10px; border: 2px solid ${biblioActive ? 'var(--primary-color)' : 'var(--glass-border)'}; background: ${biblioActive ? 'rgba(99,102,241,0.1)' : 'var(--card-bg)'}; color: ${biblioActive ? 'var(--primary-color)' : 'var(--text-main)'}; font-size: 14px; font-weight: 600; cursor: pointer;">
                 📚 Bibliografía
+            </button>
+            <button onclick="window.switchOptionTab('disclaimer')" style="flex: 1; padding: 10px; border-radius: 10px; border: 2px solid ${disclaimerActive ? 'var(--primary-color)' : 'var(--glass-border)'}; background: ${disclaimerActive ? 'rgba(99,102,241,0.1)' : 'var(--card-bg)'}; color: ${disclaimerActive ? 'var(--primary-color)' : 'var(--text-main)'}; font-size: 14px; font-weight: 600; cursor: pointer;">
+                ⚠️ Aviso Legal
             </button>
         </div>
         <div id="options-content"></div>
@@ -2078,10 +2340,49 @@ function renderOptions() {
 
     if (profileActive) {
         renderProfileContent(document.getElementById('options-content'));
-    } else {
+    } else if (biblioActive) {
         renderBibliography(document.getElementById('options-content'));
+    } else {
+        renderDisclaimer(document.getElementById('options-content'));
     }
 }
+
+function renderDisclaimer(container) {
+    container.innerHTML = `
+        <div class="glass-card" style="padding: 20px;">
+            <h3 style="margin-top: 0; margin-bottom: 16px; color: #ef4444;">⚠️ Exención de Responsabilidad Médica</h3>
+            
+            <p style="font-size: 14px; color: var(--text-main); line-height: 1.6; margin-bottom: 16px;">
+                <strong>1. Propósito Informativo:</strong> Esta aplicación (Sugest Food / AESAN Meal Suggestions) se ha diseñado exclusivamente con <strong>fines educativos e informativos</strong>. La información, los cálculos nutricionales, los planes de comidas sugeridos y cualquier otra recomendación generada por la aplicación (incluyendo aquellos generados por Inteligencia Artificial) no deben considerarse como consejo médico, diagnóstico o tratamiento profesional.
+            </p>
+            
+            <p style="font-size: 14px; color: var(--text-main); line-height: 1.6; margin-bottom: 16px;">
+                <strong>2. Consulta a un Profesional de la Salud:</strong> Antes de realizar cambios significativos en tu dieta, iniciar cualquier programa nutricional, o modificar tus hábitos de alimentación, debes consultar siempre a tu médico, dietista o nutricionista colegiado. Esto es especialmente importante si:
+            </p>
+            <ul style="font-size: 13px; color: var(--text-main); line-height: 1.6; padding-left: 20px; margin-bottom: 16px;">
+                <li>Tienes condiciones médicas preexistentes (como diabetes, enfermedades cardiovasculares, enfermedad celíaca, etc.).</li>
+                <li>Estás embarazada o en período de lactancia.</li>
+                <li>Padeces de trastornos de la conducta alimentaria (TCA).</li>
+                <li>Tomas medicamentos que puedan interactuar con componentes dietéticos.</li>
+            </ul>
+
+            <p style="font-size: 14px; color: var(--text-main); line-height: 1.6; margin-bottom: 16px;">
+                <strong>3. Limitaciones:</strong> Aunque los cálculos energéticos y los valores dietéticos de referencia se basan en fórmulas científicas estándar (ej. ecuación de Mifflin-St Jeor) y en los perfiles nutricionales de entidades oficiales (EFSA, AESAN), los resultados son <strong>estimaciones matemáticas genéricas</strong>. No capturan todas las variables del complejo metabolismo humano individual ni garantizan prevenir déficits o excesos nutricionales absolutos.
+            </p>
+
+            <p style="font-size: 14px; color: var(--text-main); line-height: 1.6; margin-bottom: 16px;">
+                <strong>4. Uso de IA:</strong> Las sugerencias de recetas proporcionadas por el módulo "Chef IA" son generadas automáticamente. Aunque se instruye al modelo a proporcionar recetas seguras y balanceadas y a alertar sobre consideraciones médicas cuando son evidentes, existe riesgo de que la IA genere <strong>alucinaciones</strong>, ofrezca combinaciones inusuales o no considere adecuadamente ciertos solapamientos alergénicos. Se recomienda revisar el sentido común de dichas recetas.
+            </p>
+
+            <div style="background: rgba(239, 68, 68, 0.1); border-left: 4px solid #ef4444; padding: 12px; border-radius: 4px;">
+                <p style="margin: 0; font-size: 13px; font-weight: 600; color: #b91c1c;">
+                    El uso de esta aplicación implica la aceptación de este aviso. El creador y desarrollador de la aplicación no asume ninguna responsabilidad legal, implícita o explícita, por cualquier daño, lesión o problema de salud, directo o indirecto, derivado del uso o mala interpretación de la información aquí proporcionada.
+                </p>
+            </div>
+        </div>
+    `;
+}
+
 
 function renderBibliography(container) {
     container.innerHTML = `
