@@ -152,14 +152,14 @@ for base_name, m in usda_base.items():
         expanded_db.append({
             "name": f"{base_name} ({v_name})",
             "macros": {
-                "pro": round(pro, 1), "cho": round(cho, 1), "fat": round(fat, 1),
-                "fiber": round(fib, 1), "sugars": round(sug, 1),
-                "sat": round(sat, 1), "mono": round(mono, 1), "poly": round(poly, 1),
-                "omega3": round(omega3, 1), "omega6": 0, "epa": 0, "dha": 0
+                "pro": round(float(pro), 1), "cho": round(float(cho), 1), "fat": round(float(fat), 1),
+                "fiber": round(float(fib), 1), "sugars": round(float(sug), 1),
+                "sat": round(float(sat), 1), "mono": round(float(mono), 1), "poly": round(float(poly), 1),
+                "omega3": round(float(omega3), 1), "omega6": 0, "epa": 0, "dha": 0
             },
             "micros": {}, "aminos": {},
             "measures": get_measures(base_name),
-            "calories": round(cals)
+            "calories": round(float(cals))
         })
 
 print(f"Total items: {len(expanded_db)}")
